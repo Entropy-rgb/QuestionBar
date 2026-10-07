@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the QuestionBar panel",
+  "windows": ["panel"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-resize-dragging"
+  ]
+}

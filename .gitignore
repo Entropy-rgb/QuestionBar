@@ -1,0 +1,4 @@
+/src-tauri/target/
+/src-tauri/gen/
+# Your questions live here by default; keep them out of the code history.
+/notes/
