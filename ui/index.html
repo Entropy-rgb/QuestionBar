@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <title>QuestionBar</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="vendor/texmath.css">
+  <link rel="stylesheet" href="vendor/hljs/github-dark.min.css" id="hljs-theme">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="grip" title="Drag to resize"></div>
+
+  <header>
+    <div class="row">
+      <div class="field">
+        <input id="new" type="text" placeholder="New question…  #topic #tags" autocomplete="off" spellcheck="true">
+      </div>
+      <button id="use-sel" class="icon-btn" title="Use selection: quote the text you highlighted (Ctrl+Shift+V)">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 17h4l2-4V7H4v6h3zm10 0h4l2-4V7h-6v6h3z" fill="currentColor"/></svg>
+      </button>
+      <button id="pin" class="icon-btn" title="Pin: stay open when clicking elsewhere" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z" fill="currentColor"/></svg>
+      </button>
+    </div>
+    <div id="capture" class="capture" hidden>
+      <blockquote id="capture-text"></blockquote>
+      <button id="capture-clear" class="icon-btn small" title="Discard quote">
+        <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="row">
+      <div class="field">
+        <input id="search" type="search" placeholder="Search   (#tag filters)" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="row filters" role="tablist">
+      <button class="seg" data-filter="all" aria-selected="true">All <span id="count-all"></span></button>
+      <button class="seg" data-filter="open" aria-selected="false">Open <span id="count-open"></span></button>
+      <button class="seg" data-filter="answered" aria-selected="false">Answered <span id="count-answered"></span></button>
+      <span class="grow"></span>
+      <button id="back" class="seg back" title="Back to where you were (Alt+Left)" hidden>← Back</button>
+    </div>
+  </header>
+
+  <main id="list"></main>
+  <div id="peek" hidden></div>
+  <div id="toast" role="status" hidden></div>
+
+  <script src="vendor/markdown-it.umd.min.js"></script>
+  <script src="vendor/katex/katex.min.js"></script>
+  <script src="vendor/texmath.js"></script>
+  <script src="vendor/hljs/highlight.min.js"></script>
+  <script src="vendor/hljs/extra-languages.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
