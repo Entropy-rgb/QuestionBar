@@ -3,6 +3,7 @@
 
 mod config;
 mod panel;
+mod setup;
 mod store;
 mod watcher;
 
@@ -104,6 +105,69 @@ async fn read_selection(app: tauri::AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || rx.recv()).await.map_err(err)?.map_err(err)
 }
 
+/// Lets the user pick image files to insert; returns their paths (empty if cancelled).
+#[tauri::command]
+async fn pick_images(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let window = app.get_webview_window("panel").ok_or("panel window missing")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let parent = window.gtk_window().ok();
+        let dialog = gtk::FileChooserDialog::with_buttons(
+            Some("Insert image"),
+            parent.as_ref(),
+            gtk::FileChooserAction::Open,
+            &[("Cancel", gtk::ResponseType::Cancel), ("Insert", gtk::ResponseType::Accept)],
+        );
+        dialog.set_select_multiple(true);
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Images"));
+        for ext in IMAGE_EXTS {
+            filter.add_pattern(&format!("*.{ext}"));
+            filter.add_pattern(&format!("*.{}", ext.to_uppercase()));
+        }
+        dialog.add_filter(filter);
+        let paths = if dialog.run() == gtk::ResponseType::Accept {
+            dialog.filenames().into_iter().filter_map(|p| p.to_str().map(String::from)).collect()
+        } else {
+            Vec::new()
+        };
+        // SAFETY: the dialog is ours and not used after this.
+        unsafe { dialog.destroy() };
+        let _ = tx.send(paths);
+    })
+    .map_err(err)?;
+    tauri::async_runtime::spawn_blocking(move || rx.recv()).await.map_err(err)?.map_err(err)
+}
+
+#[derive(serde::Serialize)]
+struct UiSettings {
+    zoom: f32,
+    compact: bool,
+}
+
+#[tauri::command]
+fn ui_settings(config: State<Mutex<Config>>) -> UiSettings {
+    let config = config.lock().unwrap();
+    UiSettings { zoom: config.zoom, compact: config.compact }
+}
+
+#[tauri::command]
+fn save_ui_settings(config: State<Mutex<Config>>, zoom: f32, compact: bool) {
+    let mut config = config.lock().unwrap();
+    if config.zoom != zoom || config.compact != compact {
+        config.zoom = zoom;
+        config.compact = compact;
+        config.save();
+    }
+}
+
+/// Lets scripted UI tests (see `QB_DEV_EVAL`) report results on stderr.
+#[tauri::command]
+fn dev_log(msg: String) {
+    eprintln!("[ui] {msg}");
+}
+
 /// "dark" or "light", following GNOME's appearance setting.
 #[tauri::command]
 fn system_theme() -> &'static str {
@@ -142,6 +206,21 @@ fn set_busy(state: State<PanelState>, busy: bool) {
 #[tauri::command]
 fn hide_panel(app: tauri::AppHandle) {
     panel::hide(&app);
+}
+
+/// Sets up the GNOME shortcut and autostart in the background, remembering that it's done.
+fn run_setup(app: &tauri::AppHandle) {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let app = app.clone();
+    std::thread::spawn(move || match setup::run(&exe) {
+        Ok(()) => {
+            let config = app.state::<Mutex<Config>>();
+            let mut config = config.lock().unwrap();
+            config.setup_done = true;
+            config.save();
+        }
+        Err(e) => eprintln!("questionbar: shortcut/autostart setup skipped: {e}"),
+    });
 }
 
 fn percent_decode(s: &str) -> String {
@@ -200,6 +279,7 @@ fn main() {
     let start_hidden = std::env::args().any(|a| a == "--hidden");
     // `--quit` with nothing running: nothing to do (and don't open a window).
     let quit_only = std::env::args().any(|a| a == "--quit");
+    let force_setup = std::env::args().any(|a| a == "--setup");
     let config = Config::load();
     panel::init_width(config.width);
     let store = Store::new(config.notes_dir.clone())
@@ -220,6 +300,8 @@ fn main() {
                 });
             } else if argv.iter().any(|a| a == "--toggle") {
                 panel::toggle(app);
+            } else if argv.iter().any(|a| a == "--setup") {
+                run_setup(app);
             } else if !argv.iter().any(|a| a == "--hidden") {
                 panel::show(app);
             }
@@ -241,6 +323,10 @@ fn main() {
             save_image,
             import_image,
             read_selection,
+            pick_images,
+            ui_settings,
+            save_ui_settings,
+            dev_log,
             system_theme,
             open_external,
             set_pinned,
@@ -252,6 +338,16 @@ fn main() {
                 app.handle().exit(0);
                 return Ok(());
             }
+            // First run of an installed build: bind Super+` and start on login. Debug builds
+            // never do this on their own, so a dev copy can't take over the real shortcut.
+            let setup_done = app.state::<Mutex<Config>>().lock().unwrap().setup_done;
+            if force_setup || (!cfg!(debug_assertions) && !setup_done) {
+                run_setup(app.handle());
+            } else if !cfg!(debug_assertions) {
+                if let Ok(exe) = std::env::current_exe() {
+                    std::thread::spawn(move || setup::refresh(&exe));
+                }
+            }
             match watcher::spawn(app.handle().clone(), &notes_dir, own_writes) {
                 Ok(w) => {
                     app.manage(Mutex::new(w));
@@ -260,6 +356,16 @@ fn main() {
             }
             if !start_hidden {
                 panel::show(app.handle());
+            }
+            // Debug builds only: run a JS file in the panel once it has loaded, for scripted UI tests.
+            #[cfg(debug_assertions)]
+            if let Some(path) = std::env::var_os("QB_DEV_EVAL") {
+                let script = fs::read_to_string(&path)?;
+                let win = app.get_webview_window("panel").expect("panel window");
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let _ = win.eval(script);
+                });
             }
             Ok(())
         })

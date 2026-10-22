@@ -12,6 +12,12 @@ pub struct Config {
     pub notes_dir: PathBuf,
     /// Panel width in physical pixels, remembered across restarts.
     pub width: u32,
+    /// Text size of questions and answers (1.0 = 100%).
+    pub zoom: f32,
+    /// One line per question in the list.
+    pub compact: bool,
+    /// The Super+` shortcut and autostart have been set up (see setup.rs).
+    pub setup_done: bool,
 }
 
 fn home() -> PathBuf {
@@ -20,7 +26,7 @@ fn home() -> PathBuf {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { notes_dir: home().join("Documents/QuestionBar/notes"), width: 420 }
+        Config { notes_dir: home().join("Documents/QuestionBar/notes"), width: 420, zoom: 1.0, compact: false, setup_done: false }
     }
 }
 
