@@ -12,6 +12,8 @@
   --danger: #f06363;
   --code-bg: #121217;
   --radius: 8px;
+  /* Text size of the question list (Ctrl+= / Ctrl+-). */
+  --zoom: 1;
   color-scheme: dark;
 }
 
@@ -105,7 +107,7 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .suggest div[aria-selected="true"] { background: var(--accent-soft); }
 .suggest small { color: var(--muted); }
 
-#list { flex: 1; overflow-y: auto; padding: 8px 8px 40px; }
+#list { flex: 1; overflow-y: auto; padding: 8px 8px 40px; font-size: calc(14px * var(--zoom)); }
 
 .empty { color: var(--muted); text-align: center; padding: 40px 20px; }
 
@@ -164,7 +166,7 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .editor .tabs { display: flex; gap: 4px; margin-bottom: 6px; }
 .editor textarea {
   min-height: 160px; resize: vertical;
-  font: 13px/1.5 ui-monospace, "Ubuntu Mono", monospace;
+  font: 0.93em/1.5 ui-monospace, "Ubuntu Mono", monospace;
 }
 .editor .preview { min-height: 80px; border: 1px dashed var(--border); border-radius: var(--radius); padding: 8px 10px; }
 .editor.dropping textarea { border-color: var(--accent); background: var(--accent-soft); }
@@ -187,7 +189,7 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.35em;
 }
 .md pre { background: var(--code-bg); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
-.md pre code { background: none; padding: 0; font-size: 12.5px; }
+.md pre code { background: none; padding: 0; font-size: 0.9em; }
 .md pre.hljs { background: var(--code-bg); }
 .md blockquote { border-left: 3px solid var(--border); margin-left: 0; padding-left: 10px; color: var(--muted); }
 .md img { max-width: 100%; border-radius: 6px; }
@@ -218,7 +220,7 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   margin: 0; flex: 1; min-width: 0;
   padding: 6px 10px; border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
   background: var(--accent-soft); white-space: pre-wrap; overflow-wrap: anywhere;
-  font-size: 13px; color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 0.93em; color: color-mix(in srgb, var(--text) 88%, var(--muted));
 }
 .capture blockquote { max-height: 120px; overflow-y: auto; }
 blockquote.captured { margin-bottom: 10px; }
@@ -226,25 +228,25 @@ blockquote.captured { margin-bottom: 10px; }
 .quote-mark { color: var(--muted); font-size: 13px; line-height: 1; }
 
 .title-edit { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
-.title-edit .quote-edit { font-size: 13px; resize: vertical; min-height: 0; }
+.title-edit .quote-edit { font-size: 0.93em; resize: vertical; min-height: 0; }
 .title-edit .hint, .editor .hint { color: var(--muted); font-size: 11.5px; }
 
 /* Question links */
 .grow { flex: 1; }
 .seg.back { color: var(--accent); }
-.md a.qlink {
+a.qlink {
   text-decoration: none; color: var(--accent);
   background: var(--accent-soft); border-radius: 4px; padding: 0 4px;
 }
-.md a.qlink::before { content: "↗ "; font-size: 0.85em; }
-.md a.qlink:hover { text-decoration: underline; }
-.md a.qlink.missing { color: var(--muted); background: none; border: 1px dashed var(--border); cursor: default; text-decoration: line-through; }
+a.qlink::before { content: "↗ "; font-size: 0.85em; }
+a.qlink:hover { text-decoration: underline; }
+a.qlink.missing { color: var(--muted); background: none; border: 1px dashed var(--border); cursor: default; text-decoration: line-through; }
 
 #peek {
   position: fixed; z-index: 30;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-  padding: 10px 12px; max-height: 50vh; overflow-y: auto; font-size: 13px;
+  padding: 10px 12px; max-height: 50vh; overflow-y: auto; font-size: calc(13px * var(--zoom));
 }
 .peek-head { display: flex; gap: 8px; align-items: baseline; }
 .peek-meta { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
@@ -256,7 +258,63 @@ blockquote.captured { margin-bottom: 10px; }
 }
 .mini-dot.answered { background: var(--answered); border-color: var(--answered); }
 
-.suggest.link-suggest { position: fixed; right: auto; top: 0; }
+.suggest.caret-menu { position: fixed; right: auto; top: 0; }
 .link-suggest .link-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-suggest small { margin-left: 8px; flex: none; }
 .suggest .none { color: var(--muted); cursor: default; }
+
+/* Slash menu and \ autocomplete rows */
+.caret-menu .row-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; overflow: hidden; }
+.slash-icon { width: 22px; flex: none; text-align: center; color: var(--muted); font-weight: 600; }
+.tex-sym { min-width: 30px; flex: none; text-align: center; }
+.tex-cmd { font: 12.5px ui-monospace, "Ubuntu Mono", monospace; white-space: nowrap; }
+.tex-suggest small { margin-left: 8px; flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Live math preview under the line being typed */
+.math-preview {
+  position: fixed; z-index: 25; max-width: calc(100vw - 16px); overflow-x: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); padding: 6px 10px;
+  font-size: calc(14px * var(--zoom));
+}
+.math-preview .katex { font-size: 1.3em; }
+.math-preview .katex-display { margin: 0; }
+.math-preview .math-render.stale { opacity: 0.45; }
+.math-error { color: var(--danger); font: 12px ui-monospace, "Ubuntu Mono", monospace; margin-top: 2px; }
+
+/* Callouts (> [!note]) and fold-away blocks (> [!note]-) */
+.md .callout {
+  --c: #5b8def;
+  border-left: 3px solid var(--c); border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--c) 11%, transparent);
+  padding: 6px 10px; margin: 0 0 0.7em;
+}
+.md .callout-title { font-weight: 600; color: var(--c); }
+.md .callout-body > :first-child { margin-top: 4px; }
+.md .callout-body > :last-child { margin-bottom: 0; }
+.md details.callout > summary { cursor: pointer; list-style: none; }
+.md details.callout > summary::-webkit-details-marker { display: none; }
+.md details.callout > summary::before { content: "▸"; display: inline-block; width: 1em; }
+.md details.callout[open] > summary::before { content: "▾"; }
+.md .callout-tip, .md .callout-hint, .md .callout-success, .md .callout-check, .md .callout-done { --c: #3fb97a; }
+.md .callout-important, .md .callout-example { --c: #a371f7; }
+.md .callout-warning, .md .callout-caution, .md .callout-attention { --c: #e8973c; }
+.md .callout-danger, .md .callout-error, .md .callout-failure, .md .callout-fail, .md .callout-bug { --c: #f06363; }
+.md .callout-question, .md .callout-help, .md .callout-faq { --c: #d9a520; }
+.md .callout-quote, .md .callout-cite { --c: #8f8fa1; }
+.md .callout-abstract, .md .callout-summary, .md .callout-tldr { --c: #36b5c6; }
+
+/* Checklists */
+.md li.task-item { list-style: none; }
+.md input.task { margin: 0 0.45em 0 -1.35em; vertical-align: -0.1em; accent-color: var(--answered); cursor: pointer; }
+.editor .md input.task, #peek input.task { cursor: default; }
+
+/* Compact mode: one line per question until it's expanded */
+.seg.icon-seg { display: grid; place-items: center; padding: 3px 7px; }
+.seg[aria-pressed="true"] { background: var(--surface-2); color: var(--accent); }
+.compact .q:not(.expanded) { padding-top: 3px; padding-bottom: 3px; }
+.compact .q:not(.expanded) .q-head { align-items: center; }
+.compact .q:not(.expanded) .q-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compact .q:not(.expanded) .q-meta { display: none; }
+.compact .q:not(.expanded) .dot { width: 14px; height: 14px; margin-top: 0; }
+.compact .q:not(.expanded) .dot svg { width: 9px; height: 9px; }

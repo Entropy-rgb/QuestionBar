@@ -39,6 +39,9 @@ const state = {
   captureQuote: '',
   /** Where to return after following a link: [{ scroll, search, filter }] */
   backStack: [],
+  /** Text size of the list (1 = 100%) and one-line-per-question mode; saved in config.json. */
+  zoom: 1,
+  compact: false,
 };
 
 // ---------- Markdown rendering ----------
@@ -54,6 +57,8 @@ const md = window.markdownit({
   },
 });
 md.use(texmath, { engine: katex, delimiters: 'dollars', katexOptions: { throwOnError: false } });
+md.use(calloutPlugin);
+md.use(taskListPlugin);
 
 // Relative image paths (assets/x.png) are served from the notes folder.
 const renderImage = md.renderer.rules.image;
@@ -81,6 +86,34 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   }
   return renderLinkOpen(tokens, idx, options, env, self);
 };
+
+// Question titles can contain the same links; everything else in a title is plain text.
+const TITLE_LINK = /\[((?:\\.|[^\]\\])*)\]\(#([0-9a-z]{4,16})\)/g;
+const unescapeLabel = (label) => label.replace(/\\(.)/g, '$1');
+
+/** A title with its `[label](#id)` links reduced to their labels. */
+function plainTitle(title) {
+  return title.replace(TITLE_LINK, (_, label) => unescapeLabel(label));
+}
+
+/** A title as DOM nodes, with question links made clickable. */
+function renderTitle(title) {
+  const nodes = [];
+  let last = 0;
+  for (const m of title.matchAll(TITLE_LINK)) {
+    if (m.index > last) nodes.push(title.slice(last, m.index));
+    const exists = state.questions.some((q) => q.id === m[2]);
+    nodes.push(h('a', {
+      class: exists ? 'qlink' : 'qlink missing',
+      href: '#' + m[2],
+      'data-qid': m[2],
+      title: exists ? null : 'The linked question was deleted',
+    }, unescapeLabel(m[1])));
+    last = m.index + m[0].length;
+  }
+  if (last < title.length) nodes.push(title.slice(last));
+  return nodes;
+}
 
 function renderMarkdown(text) {
   return h('div', { class: 'md', html: md.render(text) });
@@ -133,7 +166,7 @@ function parseSearch(text) {
 function matches(q, { words, tags }) {
   if (!tags.every((t) => q.topic === t || q.tags.includes(t))) return false;
   if (!words.length) return true;
-  const hay = [q.title, q.answer, q.quote, q.topic, ...q.tags].join('\n').toLowerCase();
+  const hay = [plainTitle(q.title), q.answer, q.quote, q.topic, ...q.tags].join('\n').toLowerCase();
   return words.every((w) => hay.includes(w));
 }
 
@@ -180,7 +213,8 @@ function attachAutocomplete(input, onEnter) {
   };
   const update = () => {
     const tok = token();
-    if (!tok) return hide();
+    const inLink = /\[\[[^\[\]\n]*$/.test(input.value.slice(0, input.selectionStart));
+    if (!tok || inLink) return hide();
     items = hashtagIndex().filter((t) => t.name.startsWith(tok.prefix) && t.name !== tok.prefix).slice(0, 6);
     if (!items.length) return hide();
     sel = 0;
@@ -222,7 +256,7 @@ function attachAutocomplete(input, onEnter) {
   });
 }
 
-// ---------- Question-link autocomplete ([[ in the answer editor) ----------
+// ---------- Finding questions to link to ----------
 
 /** Questions whose titles contain every word of `query`, best matches first. */
 function findQuestions(query, excludeId) {
@@ -231,7 +265,7 @@ function findQuestions(query, excludeId) {
   return state.questions
     .filter((q) => q.id !== excludeId)
     .map((q) => {
-      const title = q.title.toLowerCase();
+      const title = plainTitle(q.title).toLowerCase();
       if (!words.every((w) => title.includes(w))) return null;
       const score = !q0 ? 0 : title.startsWith(q0) ? 0 : title.includes(q0) ? 1 : 2;
       return { q, score };
@@ -239,101 +273,6 @@ function findQuestions(query, excludeId) {
     .filter(Boolean)
     .sort((a, b) => a.score - b.score || b.q.id.localeCompare(a.q.id))
     .map((x) => x.q);
-}
-
-/** Viewport position just below the caret in a textarea (mirror-element technique). */
-function caretCoords(ta) {
-  const style = getComputedStyle(ta);
-  const mirror = document.createElement('div');
-  for (const prop of ['boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'fontFamily', 'fontSize',
-    'fontWeight', 'lineHeight', 'letterSpacing', 'tabSize']) {
-    mirror.style[prop] = style[prop];
-  }
-  Object.assign(mirror.style, { position: 'absolute', visibility: 'hidden', top: '0', left: '-9999px',
-    whiteSpace: 'pre-wrap', overflowWrap: 'break-word', borderStyle: 'solid' });
-  mirror.textContent = ta.value.slice(0, ta.selectionStart);
-  const marker = h('span', {}, '\u200b');
-  mirror.append(marker);
-  document.body.append(mirror);
-  const rect = ta.getBoundingClientRect();
-  const x = rect.left + marker.offsetLeft - ta.scrollLeft;
-  const y = rect.top + marker.offsetTop - ta.scrollTop;
-  const lineHeight = marker.offsetHeight;
-  mirror.remove();
-  return { x, y, lineHeight };
-}
-
-function attachLinkAutocomplete(textarea, selfId, container) {
-  // Fixed-position so it can sit at the caret; lives inside the editor and goes away with it.
-  const box = h('div', { class: 'suggest link-suggest', hidden: true });
-  container.append(box);
-  let items = [];
-  let sel = 0;
-
-  const token = () => {
-    const pos = textarea.selectionStart;
-    const m = textarea.value.slice(0, pos).match(/\[\[([^\[\]\n]*)$/);
-    return m ? { start: pos - m[0].length, end: pos, query: m[1] } : null;
-  };
-  const hide = () => { box.hidden = true; items = []; };
-  const place = () => {
-    const { x, y, lineHeight } = caretCoords(textarea);
-    const width = Math.min(340, window.innerWidth - 16);
-    box.style.width = width + 'px';
-    box.style.left = Math.max(8, Math.min(x, window.innerWidth - width - 8)) + 'px';
-    const below = y + lineHeight + 4;
-    box.style.top = (below + box.offsetHeight > window.innerHeight - 8 ? y - box.offsetHeight - 4 : below) + 'px';
-  };
-  const draw = () => {
-    box.replaceChildren(...(items.length
-      ? items.map((q, i) => h('div', {
-        'aria-selected': String(i === sel),
-        onmousedown: (e) => { e.preventDefault(); sel = i; accept(); },
-      }, h('span', { class: 'link-title' }, h('i', { class: `mini-dot ${q.status}` }), q.title), h('small', {}, q.topic)))
-      : [h('div', { class: 'none' }, 'No question matches')]));
-    box.hidden = false;
-    place();
-  };
-  const update = () => {
-    const tok = token();
-    if (!tok) return hide();
-    items = findQuestions(tok.query, selfId).slice(0, 7);
-    sel = 0;
-    draw();
-  };
-  const accept = () => {
-    const tok = token();
-    const q = items[sel];
-    if (!tok || !q) return hide();
-    const label = q.title.replace(/([\[\]\\])/g, '\\$1');
-    const after = textarea.value.slice(tok.end).replace(/^[^\]\n]*\]\]/, '');
-    const link = `[${label}](#${q.id})`;
-    textarea.value = textarea.value.slice(0, tok.start) + link + after;
-    const caret = tok.start + link.length;
-    textarea.setSelectionRange(caret, caret);
-    hide();
-    textarea.dispatchEvent(new Event('input'));
-  };
-
-  textarea.addEventListener('input', update);
-  textarea.addEventListener('click', update);
-  textarea.addEventListener('blur', () => setTimeout(hide, 150));
-  textarea.addEventListener('keydown', (e) => {
-    if (box.hidden) return;
-    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && items.length) {
-      sel = (sel + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
-      draw();
-    } else if ((e.key === 'Enter' || e.key === 'Tab') && items.length) {
-      accept();
-    } else if (e.key === 'Escape') {
-      hide();
-    } else {
-      return;
-    }
-    e.preventDefault();
-    e.stopImmediatePropagation();
-  });
 }
 
 // ---------- Rendering ----------
@@ -366,7 +305,7 @@ function renderQuestion(q) {
   });
   const title = editing && editing.kind === 'title'
     ? editing.el
-    : h('div', { class: 'q-title' }, q.title);
+    : h('div', { class: 'q-title', title: state.compact && !expanded ? plainTitle(q.title) : null }, renderTitle(q.title));
   el.append(h('div', { class: 'q-head' }, dot, title));
 
   // A click anywhere on the card expands it. Once expanded, clicks inside the
@@ -398,7 +337,7 @@ function renderQuestion(q) {
         : h('div', { class: 'no-answer' }, 'No answer yet. Double-click to write one.');
       body.append(content);
       body.addEventListener('dblclick', (e) => {
-        if (e.target.closest('.actions, a')) return;
+        if (e.target.closest('.actions, a, summary, input')) return;
         const caret = q.answer ? caretFromSelection(content, q.answer) : null;
         window.getSelection().removeAllRanges();
         editAnswer(q, caret);
@@ -439,7 +378,7 @@ function caretFromSelection(container, raw) {
 /** A draft whose question vanished (deleted or rewritten outside the app). */
 function renderOrphan(editing) {
   return h('article', { class: 'q open expanded' },
-    h('div', { class: 'q-head' }, h('div', { class: 'q-title' }, editing.title)),
+    h('div', { class: 'q-head' }, h('div', { class: 'q-title' }, plainTitle(editing.title))),
     h('div', { class: 'orphan-note' }, 'This question was changed or removed outside QuestionBar. Copy your draft before closing it.'),
     h('div', { class: 'q-body' }, editing.el),
   );
@@ -571,7 +510,7 @@ async function closeEditor() {
 
 async function editAnswer(q, caret = null) {
   await closeEditor();
-  const textarea = h('textarea', { spellcheck: 'true', placeholder: 'Write your answer in Markdown…  `code`, ```lang blocks, $math$, [[ to link a question, paste or drop images' });
+  const textarea = h('textarea', { spellcheck: 'true', placeholder: 'Write your answer in Markdown…  / for blocks, $math$ (\\ for symbols), [[ to link a question, paste or drop images' });
   textarea.value = q.answer;
   const preview = h('div', { class: 'preview', hidden: true });
   const writeTab = h('button', { class: 'seg', 'aria-selected': 'true' }, 'Write');
@@ -593,11 +532,18 @@ async function editAnswer(q, caret = null) {
     preview,
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', onclick: closeEditor }, 'Done'),
-      h('span', { class: 'hint' }, 'Ctrl+Enter done · Ctrl+P preview · [[ link · autosaves'),
+      h('span', { class: 'hint' }, 'Ctrl+Enter done · Ctrl+P preview · / blocks · [[ link · autosaves'),
     ),
   );
 
-  attachLinkAutocomplete(textarea, q.id, el);
+  // Menus first: their Enter/Tab/Esc handling must win over the editor's own keys.
+  const menus = [
+    attachLinkAutocomplete(textarea, q.id, el),
+    attachSlashMenu(textarea, el, insertImagesFromPicker),
+    attachLatexAutocomplete(textarea, el),
+  ];
+  attachListContinuation(textarea);
+  attachMathPreview(textarea, el, menus);
   textarea.addEventListener('input', () => {
     autosize(textarea);
     clearTimeout(autosaveTimer);
@@ -649,7 +595,7 @@ async function editTitle(q) {
   quoteBox.value = q.quote;
   const wrap = h('div', { class: 'title-edit', onclick: (e) => e.stopPropagation() },
     h('div', { class: 'field' }, input), quoteBox,
-    h('div', { class: 'hint' }, 'Enter save · Esc cancel · first #tag is the topic'));
+    h('div', { class: 'hint' }, 'Enter save · Esc cancel · first #tag is the topic · [[ link'));
   const save = async () => {
     const updated = await call('edit_question', { id: q.id, text: input.value, quote: quoteBox.value });
     replaceQuestion(updated);
@@ -663,6 +609,7 @@ async function editTitle(q) {
       render();
     }
   };
+  attachLinkAutocomplete(input, q.id, wrap);
   attachAutocomplete(input, save);
   input.addEventListener('keydown', cancel);
   quoteBox.addEventListener('keydown', (e) => {
@@ -701,6 +648,13 @@ function insertImage(path) {
   const before = ta.value.slice(0, ta.selectionStart);
   const pad = before && !before.endsWith('\n') ? '\n' : '';
   insertAtCursor(ta, `${pad}![](${path})\n`);
+}
+
+async function insertImagesFromPicker() {
+  const editing = state.editing;
+  const paths = await call('pick_images');
+  for (const path of paths) insertImage(await call('import_image', { path }));
+  if (editing && state.editing === editing) editing.textarea.focus();
 }
 
 async function onPaste(e) {
@@ -798,7 +752,7 @@ function showPeek(link) {
   const peek = $('#peek');
   peek.dataset.qid = q.id;
   peek.replaceChildren(
-    h('div', { class: 'peek-head' }, h('i', { class: `mini-dot ${q.status}` }), h('strong', {}, q.title)),
+    h('div', { class: 'peek-head' }, h('i', { class: `mini-dot ${q.status}` }), h('strong', {}, renderTitle(q.title))),
     h('div', { class: 'peek-meta' }, [q.topic, ...q.tags.map((t) => '#' + t)].join('  ')),
     q.answer ? renderMarkdown(q.answer) : h('div', { class: 'no-answer' }, 'No answer yet.'),
     h('div', { class: 'peek-foot' }, 'Click the link to jump there'),
@@ -831,6 +785,56 @@ document.addEventListener('mouseover', (e) => {
   }
 });
 
+// ---------- Text size and compact mode ----------
+
+let saveUiTimer;
+function saveUiSettings() {
+  clearTimeout(saveUiTimer);
+  saveUiTimer = setTimeout(() => invoke('save_ui_settings', { zoom: state.zoom, compact: state.compact }), 400);
+}
+
+function applyZoom(zoom) {
+  state.zoom = Math.round(Math.min(2.5, Math.max(0.7, zoom)) * 10) / 10;
+  document.documentElement.style.setProperty('--zoom', state.zoom);
+  if (state.editing && state.editing.textarea) autosize(state.editing.textarea);
+}
+
+/** step: +0.1 / -0.1, or 0 to reset to 100%. */
+function changeZoom(step) {
+  const before = state.zoom;
+  applyZoom(step === 0 ? 1 : state.zoom + step);
+  if (state.zoom !== before) saveUiSettings();
+}
+
+function applyCompact(on) {
+  state.compact = on;
+  document.body.classList.toggle('compact', on);
+  $('#compact').setAttribute('aria-pressed', String(on));
+}
+
+// ---------- Checklists ----------
+
+/** Ticks or unticks the checklist item on `line` of a question's answer. */
+async function toggleTask(id, line) {
+  const q = state.questions.find((x) => x.id === id);
+  if (!q || line < 0) return;
+  const lines = q.answer.split('\n');
+  const item = /^([ \t]*(?:>[ \t]?)*[ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\]/;
+  if (!item.test(lines[line] || '')) return;
+  lines[line] = lines[line].replace(item, (_, prefix, mark) => `${prefix}[${mark === ' ' ? 'x' : ' '}]`);
+  replaceQuestion(await call('set_answer', { id, answer: lines.join('\n') }));
+  render();
+}
+
+document.addEventListener('click', (e) => {
+  const box = e.target.closest('input.task');
+  if (!box) return;
+  // The saved answer decides the state; ticking only works on a card's answer, not in previews.
+  e.preventDefault();
+  const card = box.closest('.q');
+  if (card && card.dataset.id && !box.closest('.editor, #peek')) toggleTask(card.dataset.id, Number(box.dataset.line));
+});
+
 // ---------- Panel wiring ----------
 
 async function applyTheme() {
@@ -839,6 +843,8 @@ async function applyTheme() {
   $('#hljs-theme').href = `vendor/hljs/${theme === 'dark' ? 'github-dark' : 'github'}.min.css`;
 }
 
+// Link suggestions first, so Enter picks a link instead of submitting the question.
+attachLinkAutocomplete($('#new'), null, $('#new').parentElement);
 attachAutocomplete($('#new'), addQuestion);
 
 $('#search').addEventListener('input', render);
@@ -869,6 +875,21 @@ $('#new').addEventListener('keydown', (e) => {
   }
 });
 $('#back').addEventListener('click', goBack);
+$('#compact').addEventListener('click', () => {
+  applyCompact(!state.compact);
+  saveUiSettings();
+  render();
+});
+
+// Ctrl+scroll changes the text size, one step per notch (touchpads send many small events).
+let lastWheelZoom = 0;
+document.addEventListener('wheel', (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  if (e.timeStamp - lastWheelZoom < 90) return;
+  lastWheelZoom = e.timeStamp;
+  changeZoom(e.deltaY < 0 ? 0.1 : -0.1);
+}, { passive: false });
 $('#list').addEventListener('scroll', hidePeek, { passive: true });
 
 $('#pin').addEventListener('click', () => {
@@ -884,7 +905,7 @@ $('#grip').addEventListener('mousedown', (e) => {
 
 // Question links jump inside the panel; other links open in the browser.
 document.addEventListener('click', (e) => {
-  const a = e.target.closest('.md a[href]');
+  const a = e.target.closest('a.qlink, .md a[href]');
   if (!a) return;
   e.preventDefault();
   if (a.classList.contains('qlink')) {
@@ -895,7 +916,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  const inField = e.target.matches('input, textarea');
+  const inField = e.target instanceof Element && e.target.matches('input, textarea');
   if (e.key === 'Escape') {
     if (!$('#peek').hidden) hidePeek();
     else if (state.editing && state.editing.kind === 'answer') closeEditor();
@@ -903,6 +924,15 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowLeft' && e.altKey) {
     e.preventDefault();
     goBack();
+  } else if (e.ctrlKey && !e.altKey && (e.key === '=' || e.key === '+')) {
+    e.preventDefault();
+    changeZoom(0.1);
+  } else if (e.ctrlKey && !e.altKey && e.key === '-') {
+    e.preventDefault();
+    changeZoom(-0.1);
+  } else if (e.ctrlKey && !e.altKey && e.key === '0') {
+    e.preventDefault();
+    changeZoom(0);
   } else if ((e.key === 'f' && e.ctrlKey) || (e.key === '/' && !inField)) {
     e.preventDefault();
     $('#search').focus();
@@ -925,5 +955,10 @@ listen('panel-hiding', () => {
 listen('notes-changed', () => load());
 
 applyTheme();
+invoke('ui_settings').then((s) => {
+  applyZoom(s.zoom || 1);
+  applyCompact(!!s.compact);
+  render();
+});
 load();
 $('#new').focus();
