@@ -673,6 +673,11 @@ More text.
         assert_eq!((e.topic, e.tags), (Some("a".into()), vec!["b".into()]));
         assert_eq!(parse_entry("#only").title, "#only", "a lone hashtag is the title, not a topic");
         assert_eq!(parse_entry("path #../etc").topic, None, "no path characters in topics");
+        let e = parse_entry("How does [Why does a String move?](#mh0aaaaa01) relate to Copy? #rust #traits");
+        assert_eq!(e.title, "How does [Why does a String move?](#mh0aaaaa01) relate to Copy?");
+        assert_eq!((e.topic, e.tags), (Some("rust".into()), vec!["traits".into()]));
+        let e = parse_entry("See [What is C#?](#ab12cd34)");
+        assert_eq!((e.title.as_str(), e.topic), ("See [What is C#?](#ab12cd34)", None), "a link is never a hashtag");
     }
 
     fn temp_store() -> Store {
