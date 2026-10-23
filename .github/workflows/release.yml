@@ -130,7 +130,12 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          exe=$(ls dist/*-setup.exe)
+          exe=$(find dist -type f -name '*-setup.exe' | sort | head -n 1)
+          if [ -z "$exe" ]; then
+            echo "::error::No Windows setup executable found under dist/"
+            find dist -maxdepth 5 -type f | sort
+            exit 1
+          fi
           jq -n \
             --arg version "$VERSION" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -145,9 +150,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          deb=$(find dist -type f -name '*.deb' | sort | head -n 1)
+          exe=$(find dist -type f -name '*-setup.exe' | sort | head -n 1)
+          if [ -z "$deb" ] || [ -z "$exe" ]; then
+            echo "::error::Missing release artifacts in dist/"
+            find dist -maxdepth 5 -type f | sort
+            exit 1
+          fi
           gh release create "v$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "QuestionBar $VERSION" \
             --generate-notes \
-            dist/*.deb dist/*-setup.exe dist/latest.json
+            "$deb" "$exe" dist/latest.json
