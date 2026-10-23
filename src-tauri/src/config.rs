@@ -18,21 +18,48 @@ pub struct Config {
     pub compact: bool,
     /// The Super+` shortcut and autostart have been set up (see setup.rs).
     pub setup_done: bool,
+    /// Shortcut that toggles the panel, in GNOME's accelerator syntax.
+    pub hotkey: String,
+    /// Start hidden when you log in.
+    pub autostart: bool,
+    /// Screen edge the panel docks to: "right" or "left".
+    pub side: String,
+    /// Screen to open on: "primary", "mouse", or a monitor's name.
+    pub monitor: String,
+    /// "system", "light" or "dark".
+    pub theme: String,
+    /// The welcome topic was offered (it's only created in an empty notes folder).
+    pub welcome_done: bool,
+    /// Ask GitHub for a newer version at start and once a day.
+    pub check_updates: bool,
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+fn documents() -> PathBuf {
+    dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."))
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { notes_dir: home().join("Documents/QuestionBar/notes"), width: 420, zoom: 1.0, compact: false, setup_done: false }
+        Config {
+            notes_dir: documents().join("QuestionBar").join("notes"),
+            width: 420,
+            zoom: 1.0,
+            compact: false,
+            setup_done: false,
+            hotkey: "<Super>grave".into(),
+            autostart: true,
+            side: "right".into(),
+            monitor: "primary".into(),
+            theme: "system".into(),
+            welcome_done: false,
+            check_updates: true,
+        }
     }
 }
 
+/// `~/.config/questionbar/config.json` on Linux, `%APPDATA%\questionbar\config.json` on Windows.
 fn path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config"));
-    base.join("questionbar/config.json")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("questionbar").join("config.json")
 }
 
 impl Config {

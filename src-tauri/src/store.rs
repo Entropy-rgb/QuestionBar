@@ -30,6 +30,90 @@ use serde::{Deserialize, Serialize};
 /// Topic used for questions typed without any hashtag.
 pub const INBOX: &str = "inbox";
 pub const ASSETS_DIR: &str = "assets";
+pub const WELCOME_TOPIC: &str = "welcome";
+
+/// The welcome topic created in an empty notes folder. `@name@` are question ids
+/// (filled in when it's created, so the links between them work) and `@date@` is today.
+const WELCOME: &str = r##"# Welcome
+
+## How do I save a question without losing my place?
+<!-- id: @capture@  status: answered  tags: basics  asked: @date@ -->
+
+Press **Super+\`** in any app, or the shortcut you picked in Settings. Type the question, press **Enter**, and go back to your lecture. The panel hides when you click outside it or press **Esc**.
+
+Hashtags at the end file the question:
+
+- the first one picks the topic: `Why do magnets attract? #physics` goes into `physics.md`
+- the rest become tags, like `#magnetism`
+- with no hashtag, it goes into `inbox`
+
+Type `#` and QuestionBar suggests the topics and tags you already use.
+
+## How do I write an answer with maths and code?
+<!-- id: @answer@  status: answered  tags: basics  asked: @date@ -->
+
+Double-click an answer, or click **Write answer**. You type Markdown, and **Done** shows it formatted.
+
+Put maths between dollar signs, like $E = mc^2$, or give it a line of its own:
+
+$$\int_0^1 x^2\,dx = \frac{1}{3}$$
+
+While your cursor sits inside the dollars, a preview of the formula appears under the line. Type `\` for symbols: `\al` offers $\alpha$.
+
+Type `/` at the start of a line to insert a heading, list, checklist, table, code block or callout:
+
+```python
+def area(r):
+    return 3.14159 * r ** 2
+```
+
+> [!tip]
+> Paste a screenshot with **Ctrl+V** while you edit. QuestionBar saves the image next to your notes.
+
+## How do I connect two questions?
+<!-- id: @links@  status: answered  tags: basics  asked: @date@ -->
+
+Type `[[` in an answer or a question, then pick the other question from the list. You get a link like this one: [How do I save a question without losing my place?](#@capture@)
+
+Hover the link to peek at that question. Click it to jump there; **Alt+Left** or **← Back** brings you back.
+
+## Why does this question have a quote on top?
+<!-- id: @quote@  status: answered  tags: basics  asked: @date@ -->
+> [!quote]
+> Highlight a confusing sentence in your browser or PDF, then press the ❝ button in QuestionBar.
+
+The ❝ button grabs the text you highlighted and keeps it above your question, so you remember what confused you. **Ctrl+Shift+V** in the question box does the same. With nothing highlighted, it takes what you last copied.
+
+## How do I find things again?
+<!-- id: @find@  status: answered  tags: basics  asked: @date@ -->
+
+- **Search** looks through questions, answers and quotes. Add `#physics` to stay inside one topic or tag.
+- **All**, **Open** and **Answered** filter the list. Click the circle next to a question to mark it answered.
+- **☰** switches to a compact list with one line per question.
+- **Ctrl+=** and **Ctrl+-** change the text size.
+
+The list works from the keyboard too:
+
+| Key | What it does |
+|---|---|
+| ↓ from the boxes at the top, then ↑ ↓ or j k | move through the questions |
+| Enter | open or close a question |
+| e | edit the answer |
+| t | edit the question |
+| x | mark it answered or open |
+| d, twice | delete it |
+
+## Where do my notes live?
+<!-- id: @files@  status: answered  tags: basics  asked: @date@ -->
+
+Each topic is a Markdown file in your notes folder; this one is `welcome.md`. Open the files in any editor, sync the folder with Syncthing or Dropbox, or point QuestionBar at your Obsidian vault from **Settings** (the ⚙ button). You don't need an account, and QuestionBar sends nothing anywhere.
+
+> [!note]- Want a clean start?
+> Delete these questions with **d d** or the Delete button. Settings can bring the welcome topic back.
+
+## What are you trying to understand this week?
+<!-- id: @try@  status: open  tags: basics  asked: @date@ -->
+"##;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -581,6 +665,75 @@ impl Store {
         Ok(())
     }
 
+    /// Adds the welcome topic: questions whose answers show how QuestionBar works.
+    pub fn add_welcome(&self) -> Result<()> {
+        if self.path(WELCOME_TOPIC).exists() {
+            let msg = "the welcome topic is already in your notes (welcome.md)";
+            return Err(StoreError::Io(io::Error::new(io::ErrorKind::AlreadyExists, msg)));
+        }
+        let mut text = WELCOME.replace("@date@", &today());
+        // Windows: the shortcut is Win+`, and the quote button reads the clipboard.
+        if cfg!(windows) {
+            text = text
+                .replace("**Super+\\`**", "**Win+\\`**")
+                .replace("Highlight a confusing sentence in your browser or PDF,", "Copy a confusing sentence in your browser or PDF with **Ctrl+C**,")
+                .replace("grabs the text you highlighted", "grabs the text you copied")
+                .replace(" With nothing highlighted, it takes what you last copied.", "");
+        }
+        // Ids sort newest first in the list, so the first question gets the newest id.
+        for name in ["try", "files", "find", "quote", "links", "answer", "capture"] {
+            text = text.replace(&format!("@{name}@"), &new_id());
+        }
+        self.save(&TopicFile::parse(WELCOME_TOPIC, &text))?;
+        Ok(())
+    }
+
+    /// Moves every topic file that holds questions, and the images, into `target`,
+    /// merging into topic files that already exist there. Other Markdown files stay
+    /// put. A source file is removed only after its questions are saved in `target`.
+    pub fn move_all_to(&self, target: &Path) -> Result<usize> {
+        let dest = Store::new(target.to_path_buf())?;
+        let mut moved = 0;
+        for topic in self.topics()? {
+            let src = self.load(&topic)?;
+            if src.questions.is_empty() {
+                continue;
+            }
+            let existed = dest.path(&topic).exists();
+            let mut merged = dest.load(&topic)?;
+            if !existed {
+                merged.preamble = src.preamble.clone();
+            }
+            for q in &src.questions {
+                if !merged.questions.iter().any(|m| m.id == q.id) {
+                    merged.questions.push(q.clone());
+                    moved += 1;
+                }
+            }
+            dest.save(&merged)?;
+            fs::remove_file(self.path(&topic))?;
+        }
+        let src_assets = self.dir.join(ASSETS_DIR);
+        if src_assets.is_dir() {
+            let dest_assets = target.join(ASSETS_DIR);
+            fs::create_dir_all(&dest_assets)?;
+            for entry in fs::read_dir(&src_assets)? {
+                let from = entry?.path();
+                let to = dest_assets.join(from.file_name().unwrap_or_default());
+                if to.exists() {
+                    continue;
+                }
+                // rename fails across filesystems; copy and remove instead.
+                if fs::rename(&from, &to).is_err() {
+                    fs::copy(&from, &to)?;
+                    fs::remove_file(&from)?;
+                }
+            }
+            let _ = fs::remove_dir(&src_assets);
+        }
+        Ok(moved)
+    }
+
     /// Stores image bytes under `assets/` and returns the path to use in Markdown.
     pub fn save_asset(&self, bytes: &[u8], ext: &str) -> io::Result<String> {
         let ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
@@ -775,6 +928,47 @@ My answer.
         assert_eq!(q.quote, "");
         assert!(!fs::read_to_string(s.dir().join("rust.md")).unwrap().contains("[!quote]"));
         fs::remove_dir_all(s.dir()).unwrap();
+    }
+
+    #[test]
+    fn welcome_topic_parses_and_links_resolve() {
+        let s = temp_store();
+        s.add_welcome().unwrap();
+        let qs = s.all().unwrap();
+        assert_eq!(qs.len(), 7);
+        assert!(qs.iter().all(|q| q.topic == WELCOME_TOPIC && !q.asked.is_empty() && !q.id.contains('@')));
+        assert_eq!(qs.iter().filter(|q| q.status == Status::Open).count(), 1);
+        let capture = qs.iter().find(|q| q.title.starts_with("How do I save")).unwrap();
+        let links = qs.iter().find(|q| q.title.starts_with("How do I connect")).unwrap();
+        assert!(links.answer.contains(&format!("](#{})", capture.id)), "link points at a real question");
+        assert!(capture.id > links.id, "the first question sorts first");
+        assert!(qs.iter().any(|q| q.quote.contains("a confusing sentence")), "the quote example has its quote");
+        assert!(matches!(s.add_welcome(), Err(StoreError::Io(_))), "never added twice");
+        fs::remove_dir_all(s.dir()).unwrap();
+    }
+
+    #[test]
+    fn moving_notes_merges_and_leaves_other_files() {
+        let from = temp_store();
+        let to = temp_store();
+        let a = from.add("Q one #rust", "").unwrap();
+        from.add("Q two #maths", "").unwrap();
+        to.add("Already here #rust", "").unwrap();
+        fs::write(from.dir().join("diary.md"), "# My diary\n\nnot questions\n").unwrap();
+        fs::create_dir_all(from.dir().join(ASSETS_DIR)).unwrap();
+        fs::write(from.dir().join(ASSETS_DIR).join("pic.png"), b"png").unwrap();
+
+        assert_eq!(from.move_all_to(to.dir()).unwrap(), 2);
+        let titles: Vec<String> = to.all().unwrap().into_iter().map(|q| q.title).collect();
+        assert_eq!(titles.len(), 3);
+        assert!(titles.contains(&"Already here".to_string()) && titles.contains(&"Q one".to_string()));
+        assert!(!from.dir().join("rust.md").exists() && from.dir().join("diary.md").exists());
+        assert!(to.dir().join(ASSETS_DIR).join("pic.png").exists());
+        // Moving again finds nothing left to move, and nothing is duplicated.
+        assert_eq!(from.move_all_to(to.dir()).unwrap(), 0);
+        assert_eq!(to.all().unwrap().iter().filter(|q| q.id == a.id).count(), 1);
+        fs::remove_dir_all(from.dir()).unwrap();
+        fs::remove_dir_all(to.dir()).unwrap();
     }
 
     #[test]

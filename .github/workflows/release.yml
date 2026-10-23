@@ -1,5 +1,5 @@
-# Builds QuestionBar and publishes a GitHub release with a .deb package.
-# Start it from the Actions tab: "Release" -> "Run workflow".
+# Builds QuestionBar for Linux (.deb) and Windows (setup .exe) and publishes one GitHub
+# release with both. Start it from the Actions tab: "Release" -> "Run workflow".
 name: Release
 
 on:
@@ -17,16 +17,17 @@ concurrency:
   group: release
 
 jobs:
-  release:
-    # The oldest supported Ubuntu, so the .deb installs on as many systems as possible.
-    runs-on: ubuntu-22.04
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # all tags, to find the last release
 
       - name: Pick the version
-        id: version
+        id: pick
         env:
           REQUESTED: ${{ inputs.version }}
         run: |
@@ -51,7 +52,22 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Releasing v$version"
 
-      - name: Install build dependencies
+  build:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          # The oldest supported Ubuntu, so the .deb installs on as many systems as possible.
+          - os: ubuntu-22.04
+            bundle: deb
+          - os: windows-latest
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
@@ -65,27 +81,73 @@ jobs:
           workspaces: src-tauri
 
       - name: Run the tests
+        if: runner.os == 'Linux'
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       # The version only lives in this build; nothing is committed back.
       - name: Put the version into the build
+        shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tauri.conf.json.tmp
           mv tauri.conf.json.tmp src-tauri/tauri.conf.json
           sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" src-tauri/Cargo.toml
 
       - name: Build the .deb
+        if: runner.os == 'Linux'
         run: npx --yes @tauri-apps/cli@2 build --bundles deb
+
+      # Also signs the installer so installed copies can update themselves.
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.bundle }}
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The Windows updater reads this file from the latest release.
+      - name: Write latest.json
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          exe=$(ls dist/*-setup.exe)
+          jq -n \
+            --arg version "$VERSION" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg signature "$(cat "$exe.sig")" \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/$(basename "$exe")" \
+            '{version: $version, pub_date: $date, notes: "See the release page for what changed.",
+              platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > dist/latest.json
+          cat dist/latest.json
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "QuestionBar $VERSION" \
             --generate-notes \
-            src-tauri/target/release/bundle/deb/*.deb
+            dist/*.deb dist/*-setup.exe dist/latest.json

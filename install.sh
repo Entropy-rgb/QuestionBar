@@ -46,7 +46,8 @@ open(path, "w").write(json.dumps(config, indent=2) + "\n")' "$CONFIG"
 fi
 
 echo "Building (release)…"
-(cd src-tauri && cargo build --release --features tauri/custom-protocol)
+# Marked as a source build: it updates with `git pull && ./install.sh`, not from releases.
+(cd src-tauri && QUESTIONBAR_SOURCE_BUILD=1 cargo build --release --features tauri/custom-protocol)
 
 install -Dm755 src-tauri/target/release/questionbar "$BIN"
 install -Dm644 src-tauri/icons/icon.png "$ICON"

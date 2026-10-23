@@ -42,6 +42,16 @@ const state = {
   /** Text size of the list (1 = 100%) and one-line-per-question mode; saved in config.json. */
   zoom: 1,
   compact: false,
+  /** The question the keyboard acts on, and the ids in the order they're shown. */
+  selected: null,
+  visibleIds: [],
+  settingsOpen: false,
+  /** File dialogs open right now; the panel mustn't hide while one is up. */
+  dialogs: 0,
+  themePref: 'system',
+  /** "linux" or "windows" (from get_settings). */
+  platform: 'linux',
+  side: 'right',
 };
 
 // ---------- Markdown rendering ----------
@@ -76,7 +86,8 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const src = token.attrGet('src') || '';
   if (src && !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith('//')) {
-    token.attrSet('src', 'notes://localhost/' + src.replace(/^\.?\//, ''));
+    // notes://localhost/… on Linux, http://notes.localhost/… on Windows.
+    token.attrSet('src', window.__TAURI__.core.convertFileSrc(src.replace(/^\.?\//, ''), 'notes'));
   }
   return renderImage(tokens, idx, options, env, self);
 };
@@ -322,7 +333,8 @@ function addToSearch(tag) {
 function renderQuestion(q) {
   const editing = state.editing && state.editing.id === q.id ? state.editing : null;
   const expanded = state.expanded.has(q.id) || !!editing;
-  const el = h('article', { class: `q ${q.status}${expanded ? ' expanded' : ''}`, 'data-id': q.id });
+  const selected = state.selected === q.id ? ' selected' : '';
+  const el = h('article', { class: `q ${q.status}${expanded ? ' expanded' : ''}${selected}`, 'data-id': q.id });
 
   const dot = h('button', {
     class: 'dot',
@@ -339,8 +351,13 @@ function renderQuestion(q) {
   // answer don't collapse it, so text can be selected and double-clicked.
   el.addEventListener('click', (e) => {
     if (editing || e.target.closest('button, a, input, textarea')) return;
-    if (expanded && e.target.closest('.q-body')) return;
+    state.selected = q.id;
+    if (expanded && e.target.closest('.q-body')) {
+      markSelected();
+      return;
+    }
     if (!window.getSelection().isCollapsed) return;
+    focusList();
     toggleExpand(q.id);
   });
 
@@ -430,6 +447,7 @@ function render() {
     if (state.filter === 'all' || q.status === state.filter || (state.editing && state.editing.id === q.id)) shown.push(q);
   }
   shown.sort(compare);
+  state.visibleIds = shown.map((q) => q.id);
   for (const k of Object.keys(counts)) $('#count-' + k).textContent = counts[k] || '';
 
   const items = shown.map(renderQuestion);
@@ -494,16 +512,41 @@ function confirmDelete(button, q) {
     }, 3000);
     return;
   }
-  call('delete_question', { id: q.id }).then(() => {
-    state.questions = state.questions.filter((x) => x.id !== q.id);
-    state.expanded.delete(q.id);
-    render();
-  });
+  removeQuestion(q);
+}
+
+async function removeQuestion(q) {
+  await call('delete_question', { id: q.id });
+  const index = state.visibleIds.indexOf(q.id);
+  state.questions = state.questions.filter((x) => x.id !== q.id);
+  state.expanded.delete(q.id);
+  render();
+  if (state.selected === q.id) {
+    state.selected = null;
+    if (index >= 0 && state.visibleIds.length) selectAt(Math.min(index, state.visibleIds.length - 1));
+  }
+}
+
+/** Hiding on blur is off while you edit or while a file dialog is open. */
+function syncBusy() {
+  invoke('set_busy', { busy: !!state.editing || state.dialogs > 0 });
+}
+
+async function withDialog(fn) {
+  state.dialogs++;
+  syncBusy();
+  try {
+    return await fn();
+  } finally {
+    state.dialogs--;
+    syncBusy();
+  }
 }
 
 function setEditing(editing) {
   state.editing = editing;
-  invoke('set_busy', { busy: !!editing });
+  if (editing) state.selected = editing.id;
+  syncBusy();
 }
 
 // Saves are chained so they reach the backend in order.
@@ -535,6 +578,8 @@ async function closeEditor() {
   await saveAnswer();
   setEditing(null);
   render();
+  // Keep going from the keyboard where you left off.
+  if (state.selected) focusList();
 }
 
 async function editAnswer(q, caret = null) {
@@ -681,7 +726,7 @@ function insertImage(path) {
 
 async function insertImagesFromPicker() {
   const editing = state.editing;
-  const paths = await call('pick_images');
+  const paths = await withDialog(() => call('pick_images'));
   for (const path of paths) insertImage(await call('import_image', { path }));
   if (editing && state.editing === editing) editing.textarea.focus();
 }
@@ -864,10 +909,175 @@ document.addEventListener('click', (e) => {
   if (card && card.dataset.id && !box.closest('.editor, #peek')) toggleTask(card.dataset.id, Number(box.dataset.line));
 });
 
+// ---------- Keyboard navigation in the list ----------
+
+function focusList() {
+  $('#list').focus({ preventScroll: true });
+}
+
+/** Moves the selection ring to state.selected without re-rendering. */
+function markSelected() {
+  for (const el of document.querySelectorAll('.q.selected')) el.classList.remove('selected');
+  const el = state.selected && $(`.q[data-id="${state.selected}"]`);
+  if (el) el.classList.add('selected');
+}
+
+function selectAt(index) {
+  const ids = state.visibleIds;
+  if (!ids.length) return;
+  state.selected = ids[Math.max(0, Math.min(ids.length - 1, index))];
+  markSelected();
+  const el = $(`.q[data-id="${state.selected}"]`);
+  if (el) el.scrollIntoView({ block: 'nearest' });
+  focusList();
+}
+
+function moveSelection(step) {
+  const i = state.visibleIds.indexOf(state.selected);
+  if (i < 0) return selectAt(step > 0 ? 0 : state.visibleIds.length - 1);
+  // Up from the first question goes back to the question box.
+  if (i + step < 0) return $('#new').focus();
+  selectAt(i + step);
+}
+
+let pendingDelete = null;
+function deleteFromKeyboard(q) {
+  if (pendingDelete && pendingDelete.id === q.id && Date.now() < pendingDelete.until) {
+    pendingDelete = null;
+    removeQuestion(q);
+    return;
+  }
+  pendingDelete = { id: q.id, until: Date.now() + 3000 };
+  toast(`Press d again to delete “${plainTitle(q.title)}”`, 'info');
+}
+
+/** Keys for the selected question while the list has focus. Returns true if it used the key. */
+function listKey(e) {
+  switch (e.key) {
+    case 'ArrowDown': case 'j': moveSelection(1); return true;
+    case 'ArrowUp': case 'k': moveSelection(-1); return true;
+    case 'Home': selectAt(0); return true;
+    case 'End': selectAt(state.visibleIds.length - 1); return true;
+    case 'n': $('#new').focus(); return true;
+  }
+  const q = state.questions.find((x) => x.id === state.selected);
+  if (!q) return false;
+  switch (e.key) {
+    case 'Enter': toggleExpand(q.id); return true;
+    case 'ArrowRight': if (!state.expanded.has(q.id)) toggleExpand(q.id); return true;
+    case 'ArrowLeft': if (state.expanded.has(q.id)) toggleExpand(q.id); return true;
+    case 'e': editAnswer(q); return true;
+    case 't': editTitle(q); return true;
+    case 'x': toggleStatus(q); return true;
+    case 'd': case 'Delete': deleteFromKeyboard(q); return true;
+  }
+  return false;
+}
+
+// ↓ in the question or search box moves into the list.
+for (const box of [$('#new'), $('#search')]) {
+  box.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' || e.ctrlKey || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    const i = state.visibleIds.indexOf(state.selected);
+    selectAt(i >= 0 ? i : 0);
+  });
+}
+
 // ---------- Panel wiring ----------
 
+function applySide(side) {
+  state.side = side === 'left' ? 'left' : 'right';
+  document.body.classList.toggle('left', state.side === 'left');
+}
+
+/** Settings from config.json that change how the panel looks. */
+function applySettings(s) {
+  state.platform = s.platform;
+  applyZoom(s.zoom || 1);
+  applyCompact(!!s.compact);
+  applySide(s.side);
+  state.themePref = s.theme || 'system';
+  applyTheme();
+  // Windows has no highlighted-text selection, so the quote button uses the clipboard.
+  $('#use-sel').title = s.platform === 'windows'
+    ? 'Quote the text you copied (Ctrl+Shift+V)'
+    : 'Use selection: quote the text you highlighted (Ctrl+Shift+V)';
+  render();
+}
+
+// ---------- Updates ----------
+
+const DAY = 24 * 60 * 60 * 1000;
+let updateTimer;
+
+function dismissedUpdate() {
+  try {
+    return localStorage.getItem('qb-dismissed-update') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** Shows the "new version" bar, unless you closed it for this version. */
+function showUpdate(info) {
+  const bar = $('#update');
+  if (!info || info.version === dismissedUpdate()) {
+    bar.hidden = true;
+    return;
+  }
+  const action = info.can_install
+    ? h('button', { class: 'btn primary', onclick: (e) => installUpdate(e.currentTarget) }, 'Restart to update')
+    : h('button', { class: 'btn primary', onclick: () => call('open_external', { url: info.url }) }, 'Download');
+  bar.replaceChildren(
+    h('span', { class: 'update-text' }, `QuestionBar ${info.version} is out.`),
+    action,
+    h('button', {
+      class: 'icon-btn small',
+      title: 'Not now',
+      html: '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>',
+      onclick: () => {
+        try { localStorage.setItem('qb-dismissed-update', info.version); } catch (e) { /* not remembered, that's fine */ }
+        bar.hidden = true;
+      },
+    }));
+  bar.hidden = false;
+}
+
+async function installUpdate(button) {
+  button.disabled = true;
+  button.textContent = 'Downloading…';
+  const stop = await listen('update-progress', (e) => {
+    button.textContent = `Downloading… ${Math.round(e.payload * 100)}%`;
+  });
+  try {
+    await call('install_update');
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = 'Restart to update';
+  } finally {
+    stop();
+  }
+}
+
+/** Automatic checks stay quiet when they fail (offline, GitHub down). */
+async function checkForUpdates() {
+  try {
+    showUpdate(await invoke('check_update'));
+  } catch (e) {
+    // Try again at the next daily check.
+  }
+}
+
+function scheduleUpdateChecks(on) {
+  clearInterval(updateTimer);
+  if (!on) return;
+  setTimeout(checkForUpdates, 5000);
+  updateTimer = setInterval(checkForUpdates, DAY);
+}
+
 async function applyTheme() {
-  const theme = await invoke('system_theme');
+  const theme = state.themePref === 'system' ? await invoke('system_theme') : state.themePref;
   document.documentElement.dataset.theme = theme;
   $('#hljs-theme').href = `vendor/hljs/${theme === 'dark' ? 'github-dark' : 'github'}.min.css`;
 }
@@ -931,7 +1141,7 @@ $('#pin').addEventListener('click', () => {
 
 $('#grip').addEventListener('mousedown', (e) => {
   e.preventDefault();
-  window.__TAURI__.window.getCurrentWindow().startResizeDragging('West');
+  window.__TAURI__.window.getCurrentWindow().startResizeDragging(state.side === 'left' ? 'East' : 'West');
 });
 
 // Question links jump inside the panel; other links open in the browser.
@@ -947,7 +1157,15 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (state.settingsOpen) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSettings();
+    }
+    return;
+  }
   const inField = e.target instanceof Element && e.target.matches('input, textarea');
+  const onList = e.target === document.body || e.target === $('#list');
   if (e.key === 'Escape') {
     if (!$('#peek').hidden) hidePeek();
     else if (state.editing && state.editing.kind === 'answer') closeEditor();
@@ -971,6 +1189,8 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'n' && e.ctrlKey) {
     e.preventDefault();
     $('#new').focus();
+  } else if (onList && !e.ctrlKey && !e.altKey && !e.metaKey && listKey(e)) {
+    e.preventDefault();
   }
 });
 
@@ -982,14 +1202,16 @@ listen('panel-shown', () => {
 listen('panel-hiding', () => {
   hidePeek();
   saveAnswer();
+  // The next Super+` should land in the question box, not in Settings.
+  if (state.settingsOpen) closeSettings();
 });
 listen('notes-changed', () => load());
 
-applyTheme();
-invoke('ui_settings').then((s) => {
-  applyZoom(s.zoom || 1);
-  applyCompact(!!s.compact);
-  render();
+invoke('get_settings').then((s) => {
+  applySettings(s);
+  scheduleUpdateChecks(s.check_updates && !s.source_build);
 });
+// Things the app wants you to know once, e.g. that the shortcut fell back to another one.
+invoke('take_notices').then((notices) => notices.forEach((n) => toast(n, 'info')));
 load();
 $('#new').focus();

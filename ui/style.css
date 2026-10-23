@@ -203,7 +203,7 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .md eq, .md section.eqno { color: inherit; }
 
 #toast {
-  position: fixed; left: 12px; right: 12px; bottom: 12px;
+  position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 50;
   background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--danger);
   border-radius: var(--radius); padding: 8px 12px; font-size: 13px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
@@ -322,3 +322,63 @@ a.qlink.missing { color: var(--muted); background: none; border: 1px dashed var(
 /* Math in question titles */
 /* Same size as inline math in answers (!important beats texmath.css's 1em). */
 .title-math .katex { font-size: 1.3em !important; }
+
+/* Keyboard selection in the list (shown while the list has focus) */
+#list:focus { outline: none; }
+#list:focus-within .q.selected { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: -2px; }
+
+/* Docked on the left: border and resize grip move to the right edge */
+body.left { border-left: none; border-right: 1px solid var(--border); }
+body.left #grip { left: auto; right: 0; }
+
+/* Settings page */
+#settings {
+  position: fixed; inset: 0; z-index: 35; overflow-y: auto;
+  background: var(--bg); padding: 12px 14px 40px; outline: none;
+}
+.settings-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.settings-head h2 { font-size: 16px; margin: 0; }
+.set-section { border-top: 1px solid var(--border); padding: 12px 0 4px; }
+.set-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
+.set-label { min-width: 0; }
+.set-row > button, .set-row > .zoom-ctl, .set-row > .hotkey-now { flex: none; white-space: nowrap; }
+.set-hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.set-text { margin: 0 0 8px; color: color-mix(in srgb, var(--text) 85%, var(--muted)); }
+.set-text code, .set-choice code, .folder-path { font: 12.5px ui-monospace, "Ubuntu Mono", monospace; }
+.set-choice { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin: 8px 0; overflow-wrap: anywhere; }
+.folder-path { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; overflow-wrap: anywhere; margin-bottom: 6px; }
+.seg-group { display: flex; gap: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2px; flex: none; }
+.seg-group .seg[aria-checked="true"] { background: var(--surface-2); color: var(--text); }
+.switch {
+  flex: none; width: 38px; height: 22px; border-radius: 11px; border: 1px solid var(--border);
+  background: var(--surface-2); padding: 2px; display: flex; justify-content: flex-start;
+}
+.switch span { width: 16px; height: 16px; border-radius: 50%; background: var(--muted); }
+.switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); justify-content: flex-end; }
+.switch[aria-checked="true"] span { background: #fff; }
+.hotkey-now { font-weight: 600; white-space: nowrap; }
+.hotkey-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.chips { display: flex; gap: 4px; }
+.chip-toggle { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; color: var(--muted); }
+.chip-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+select {
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12.5px; max-width: 100%;
+}
+.zoom-ctl { display: flex; align-items: center; gap: 4px; flex: none; }
+.zoom-now { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+.btn[disabled] { opacity: 0.5; cursor: default; }
+table.keys { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.keys td { padding: 3px 4px; vertical-align: top; }
+table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 12px; }
+kbd { font: 11.5px ui-monospace, "Ubuntu Mono", monospace; background: var(--surface); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+
+/* "New version" bar */
+.update {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius); padding: 6px 8px 6px 10px; font-size: 13px;
+}
+.update-text { flex: 1; min-width: 0; }
+.update .btn { white-space: nowrap; }

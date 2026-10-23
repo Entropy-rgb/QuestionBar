@@ -22,6 +22,9 @@
       <button id="pin" class="icon-btn" title="Pin: stay open when clicking elsewhere" aria-pressed="false">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z" fill="currentColor"/></svg>
       </button>
+      <button id="settings-btn" class="icon-btn" title="Settings" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm7.4-2.5.1-1-.1-1 2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.5 11l-.1 1 .1 1-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
     </div>
     <div id="capture" class="capture" hidden>
       <blockquote id="capture-text"></blockquote>
@@ -34,6 +37,7 @@
         <input id="search" type="search" placeholder="Search   (#tag filters)" autocomplete="off" spellcheck="false">
       </div>
     </div>
+    <div id="update" class="update" role="status" hidden></div>
     <div class="row filters" role="tablist">
       <button class="seg" data-filter="all" aria-selected="true">All <span id="count-all"></span></button>
       <button class="seg" data-filter="open" aria-selected="false">Open <span id="count-open"></span></button>
@@ -46,7 +50,8 @@
     </div>
   </header>
 
-  <main id="list"></main>
+  <main id="list" tabindex="-1"></main>
+  <section id="settings" tabindex="-1" hidden></section>
   <div id="peek" hidden></div>
   <div id="toast" role="status" hidden></div>
 
@@ -59,5 +64,6 @@
   <script src="latex-commands.js"></script>
   <script src="editor-tools.js"></script>
   <script src="app.js"></script>
+  <script src="settings.js"></script>
 </body>
 </html>

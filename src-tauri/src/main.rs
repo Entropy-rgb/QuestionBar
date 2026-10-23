@@ -2,10 +2,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod hotkey;
 mod panel;
+mod settings;
+#[cfg(target_os = "linux")]
 mod setup;
 mod store;
 mod watcher;
+
+// What differs between Linux and Windows: shortcuts, autostart, clipboard, dialogs, updates.
+#[cfg(target_os = "linux")]
+#[path = "platform_linux.rs"]
+mod platform;
+#[cfg(windows)]
+#[path = "platform_windows.rs"]
+mod platform;
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -21,19 +32,32 @@ use store::{Question, Status, Store};
 
 /// App-wide flags shared between the window-event handler and commands.
 #[derive(Default)]
-struct PanelState {
+pub(crate) struct PanelState {
     /// When pinned, losing focus does not hide the panel.
-    pinned: AtomicBool,
+    pub(crate) pinned: AtomicBool,
     /// Set by the UI while an answer is being edited; suppresses hide-on-blur.
-    busy: AtomicBool,
+    pub(crate) busy: AtomicBool,
 }
 
-/// The notes folder, for serving images to the webview.
-struct NotesDir(PathBuf);
+/// The notes folder, for serving images to the webview (changes when Settings switches folders).
+pub(crate) struct NotesDir(pub(crate) Mutex<PathBuf>);
+
+/// Messages for the UI to show once, e.g. that the shortcut fell back to another one.
+#[derive(Default)]
+pub(crate) struct Notices(pub(crate) Mutex<Vec<String>>);
+
+/// A newer release. `can_install` is true where QuestionBar can install it itself (Windows).
+#[derive(serde::Serialize)]
+pub(crate) struct UpdateInfo {
+    pub(crate) version: String,
+    pub(crate) notes: String,
+    pub(crate) url: String,
+    pub(crate) can_install: bool,
+}
 
 type StoreState<'a> = State<'a, Mutex<Store>>;
 
-fn err(e: impl std::fmt::Display) -> String {
+pub(crate) fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
@@ -75,7 +99,7 @@ fn save_image(store: StoreState, request: Request) -> Result<String, String> {
     store.lock().unwrap().save_asset(bytes, ext).map_err(err)
 }
 
-const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+pub(crate) const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
 
 /// Copies a dropped image file into the notes `assets/` folder.
 #[tauri::command]
@@ -89,77 +113,38 @@ fn import_image(store: StoreState, path: String) -> Result<String, String> {
     store.lock().unwrap().save_asset(&bytes, &ext).map_err(err)
 }
 
-/// Text last highlighted in any app (the "primary" selection), falling back to
-/// the clipboard. GTK clipboards can only be read on the main thread.
+/// Text you last highlighted (Linux) or copied, for the quote button.
 #[tauri::command]
 async fn read_selection(app: tauri::AppHandle) -> Result<String, String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
-        let read = |atom: gtk::gdk::Atom| {
-            gtk::Clipboard::get(&atom).wait_for_text().map(|t| t.to_string()).filter(|t| !t.trim().is_empty())
-        };
-        let text = read(gtk::gdk::SELECTION_PRIMARY).or_else(|| read(gtk::gdk::SELECTION_CLIPBOARD));
-        let _ = tx.send(text.unwrap_or_default());
-    })
-    .map_err(err)?;
-    tauri::async_runtime::spawn_blocking(move || rx.recv()).await.map_err(err)?.map_err(err)
+    platform::read_selection(&app).await
 }
 
-/// Lets the user pick image files to insert; returns their paths (empty if cancelled).
+/// Lets you pick image files to insert; returns their paths (empty if cancelled).
 #[tauri::command]
 async fn pick_images(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let window = app.get_webview_window("panel").ok_or("panel window missing")?;
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
-        use gtk::prelude::*;
-        let parent = window.gtk_window().ok();
-        let dialog = gtk::FileChooserDialog::with_buttons(
-            Some("Insert image"),
-            parent.as_ref(),
-            gtk::FileChooserAction::Open,
-            &[("Cancel", gtk::ResponseType::Cancel), ("Insert", gtk::ResponseType::Accept)],
-        );
-        dialog.set_select_multiple(true);
-        let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Images"));
-        for ext in IMAGE_EXTS {
-            filter.add_pattern(&format!("*.{ext}"));
-            filter.add_pattern(&format!("*.{}", ext.to_uppercase()));
-        }
-        dialog.add_filter(filter);
-        let paths = if dialog.run() == gtk::ResponseType::Accept {
-            dialog.filenames().into_iter().filter_map(|p| p.to_str().map(String::from)).collect()
-        } else {
-            Vec::new()
-        };
-        // SAFETY: the dialog is ours and not used after this.
-        unsafe { dialog.destroy() };
-        let _ = tx.send(paths);
-    })
-    .map_err(err)?;
-    tauri::async_runtime::spawn_blocking(move || rx.recv()).await.map_err(err)?.map_err(err)
+    platform::pick_images(&app).await
 }
 
-#[derive(serde::Serialize)]
-struct UiSettings {
-    zoom: f32,
-    compact: bool,
-}
+/// Copies built with install.sh keep the version from the repo, so they'd always look
+/// out of date; they update with `git pull` instead.
+pub(crate) const SOURCE_BUILD: bool = option_env!("QUESTIONBAR_SOURCE_BUILD").is_some();
 
 #[tauri::command]
-fn ui_settings(config: State<Mutex<Config>>) -> UiSettings {
-    let config = config.lock().unwrap();
-    UiSettings { zoom: config.zoom, compact: config.compact }
-}
-
-#[tauri::command]
-fn save_ui_settings(config: State<Mutex<Config>>, zoom: f32, compact: bool) {
-    let mut config = config.lock().unwrap();
-    if config.zoom != zoom || config.compact != compact {
-        config.zoom = zoom;
-        config.compact = compact;
-        config.save();
+async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    if SOURCE_BUILD {
+        return Ok(None);
     }
+    platform::check_update(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    platform::install_update(&app).await
+}
+
+#[tauri::command]
+fn take_notices(notices: State<Notices>) -> Vec<String> {
+    std::mem::take(&mut *notices.0.lock().unwrap())
 }
 
 /// Lets scripted UI tests (see `QB_DEV_EVAL`) report results on stderr.
@@ -168,16 +153,10 @@ fn dev_log(msg: String) {
     eprintln!("[ui] {msg}");
 }
 
-/// "dark" or "light", following GNOME's appearance setting.
+/// "dark" or "light", following the desktop's appearance setting.
 #[tauri::command]
-fn system_theme() -> &'static str {
-    let out = std::process::Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output();
-    match out {
-        Ok(o) if String::from_utf8_lossy(&o.stdout).contains("dark") => "dark",
-        _ => "light",
-    }
+fn system_theme(app: tauri::AppHandle) -> &'static str {
+    platform::system_theme(&app)
 }
 
 /// Opens a link from an answer in the default browser instead of inside the panel.
@@ -187,10 +166,7 @@ fn open_external(url: String) -> Result<(), String> {
     if !allowed {
         return Err(format!("not opening {url}"));
     }
-    let mut child = std::process::Command::new("xdg-open").arg(&url).spawn().map_err(err)?;
-    // Reap it so it doesn't linger as a zombie.
-    std::thread::spawn(move || child.wait());
-    Ok(())
+    platform::open_url(&url)
 }
 
 #[tauri::command]
@@ -206,21 +182,6 @@ fn set_busy(state: State<PanelState>, busy: bool) {
 #[tauri::command]
 fn hide_panel(app: tauri::AppHandle) {
     panel::hide(&app);
-}
-
-/// Sets up the GNOME shortcut and autostart in the background, remembering that it's done.
-fn run_setup(app: &tauri::AppHandle) {
-    let Ok(exe) = std::env::current_exe() else { return };
-    let app = app.clone();
-    std::thread::spawn(move || match setup::run(&exe) {
-        Ok(()) => {
-            let config = app.state::<Mutex<Config>>();
-            let mut config = config.lock().unwrap();
-            config.setup_done = true;
-            config.save();
-        }
-        Err(e) => eprintln!("questionbar: shortcut/autostart setup skipped: {e}"),
-    });
 }
 
 fn percent_decode(s: &str) -> String {
@@ -268,13 +229,7 @@ fn serve_note_file(dir: &Path, request: &HttpRequest<Vec<u8>>) -> HttpResponse<V
 }
 
 fn main() {
-    // The panel needs to place itself at the screen edge, which Wayland forbids.
-    // XWayland allows it, so force the X11 GDK backend before GTK initialises.
-    std::env::set_var("GDK_BACKEND", "x11");
-    // Avoids blank WebKitGTK windows on some GPU drivers.
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
+    platform::prepare();
 
     let start_hidden = std::env::args().any(|a| a == "--hidden");
     // `--quit` with nothing running: nothing to do (and don't open a window).
@@ -287,7 +242,7 @@ fn main() {
     let notes_dir = store.dir().to_path_buf();
     let own_writes = store.own_writes();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // A second launch (e.g. from the GNOME shortcut) forwards its args here and exits.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if argv.iter().any(|a| a == "--quit") {
@@ -301,17 +256,20 @@ fn main() {
             } else if argv.iter().any(|a| a == "--toggle") {
                 panel::toggle(app);
             } else if argv.iter().any(|a| a == "--setup") {
-                run_setup(app);
+                platform::force_setup_now(app);
             } else if !argv.iter().any(|a| a == "--hidden") {
                 panel::show(app);
             }
-        }))
+        }));
+    platform::plugins(builder)
         .manage(PanelState::default())
+        .manage(Notices::default())
         .manage(Mutex::new(config))
         .manage(Mutex::new(store))
-        .manage(NotesDir(notes_dir.clone()))
+        .manage(NotesDir(Mutex::new(notes_dir.clone())))
         .register_uri_scheme_protocol("notes", |ctx, request| {
-            serve_note_file(&ctx.app_handle().state::<NotesDir>().0, &request)
+            let dir = ctx.app_handle().state::<NotesDir>().0.lock().unwrap().clone();
+            serve_note_file(&dir, &request)
         })
         .invoke_handler(tauri::generate_handler![
             list_questions,
@@ -324,8 +282,19 @@ fn main() {
             import_image,
             read_selection,
             pick_images,
-            ui_settings,
-            save_ui_settings,
+            settings::get_settings,
+            settings::update_settings,
+            settings::save_ui_settings,
+            settings::hotkey_conflicts,
+            settings::set_hotkey,
+            settings::set_autostart,
+            settings::pick_folder,
+            settings::set_notes_dir,
+            settings::add_welcome,
+            settings::set_check_updates,
+            check_update,
+            install_update,
+            take_notices,
             dev_log,
             system_theme,
             open_external,
@@ -338,22 +307,29 @@ fn main() {
                 app.handle().exit(0);
                 return Ok(());
             }
-            // First run of an installed build: bind Super+` and start on login. Debug builds
-            // never do this on their own, so a dev copy can't take over the real shortcut.
-            let setup_done = app.state::<Mutex<Config>>().lock().unwrap().setup_done;
-            if force_setup || (!cfg!(debug_assertions) && !setup_done) {
-                run_setup(app.handle());
-            } else if !cfg!(debug_assertions) {
-                if let Ok(exe) = std::env::current_exe() {
-                    std::thread::spawn(move || setup::refresh(&exe));
+            // The shortcut and start-on-login (set up once; on Windows the shortcut every start).
+            platform::start(app.handle(), force_setup);
+            // A brand-new notes folder gets the welcome topic, once.
+            {
+                let config = app.state::<Mutex<Config>>();
+                let mut config = config.lock().unwrap();
+                if !config.welcome_done {
+                    let store = app.state::<Mutex<Store>>();
+                    let store = store.lock().unwrap();
+                    if store.all().is_ok_and(|questions| questions.is_empty()) {
+                        if let Err(e) = store.add_welcome() {
+                            eprintln!("questionbar: could not add the welcome topic: {e}");
+                        }
+                    }
+                    config.welcome_done = true;
+                    config.save();
                 }
             }
-            match watcher::spawn(app.handle().clone(), &notes_dir, own_writes) {
-                Ok(w) => {
-                    app.manage(Mutex::new(w));
-                }
-                Err(e) => eprintln!("questionbar: not watching {} for changes: {e}", notes_dir.display()),
-            }
+            let watcher = watcher::spawn(app.handle().clone(), &notes_dir, own_writes)
+                .map_err(|e| eprintln!("questionbar: not watching {} for changes: {e}", notes_dir.display()))
+                .ok();
+            app.manage(Mutex::new(watcher));
+            panel::remember_window_id(app.handle());
             if !start_hidden {
                 panel::show(app.handle());
             }
