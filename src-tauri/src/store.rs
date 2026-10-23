@@ -52,7 +52,7 @@ Type `#` and QuestionBar suggests the topics and tags you already use.
 ## How do I write an answer with maths and code?
 <!-- id: @answer@  status: answered  tags: basics  asked: @date@ -->
 
-Double-click an answer, or click **Write answer**. You type Markdown, and **Done** shows it formatted.
+Double-click an answer, or click **Write answer**. The editor shows your answer formatted as you type; the Markdown symbols appear only on the line your cursor is on. Click **⤢ Wide** when you need more room.
 
 Put maths between dollar signs, like $E = mc^2$, or give it a line of its own:
 

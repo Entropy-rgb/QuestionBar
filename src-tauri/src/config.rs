@@ -32,6 +32,8 @@ pub struct Config {
     pub welcome_done: bool,
     /// Ask GitHub for a newer version at start and once a day.
     pub check_updates: bool,
+    /// Widen the panel when you start writing an answer.
+    pub wide_editing: bool,
 }
 
 fn documents() -> PathBuf {
@@ -53,6 +55,7 @@ impl Default for Config {
             theme: "system".into(),
             welcome_done: false,
             check_updates: true,
+            wide_editing: false,
         }
     }
 }

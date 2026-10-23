@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
@@ -14,6 +14,9 @@ const LABEL: &str = "panel";
 /// Last known panel width in physical pixels. A hidden window reports a size of
 /// zero, so the width is remembered here rather than read back on show.
 static WIDTH: AtomicU32 = AtomicU32::new(420);
+
+/// Writing wide: the panel takes about half the screen until the answer is done.
+static WIDE: AtomicBool = AtomicBool::new(false);
 
 pub fn init_width(width: u32) {
     WIDTH.store(width.max(1), Ordering::Relaxed);
@@ -105,10 +108,24 @@ fn dock(app: &AppHandle, win: &WebviewWindow) {
     };
     let Some(monitor) = pick_monitor(win, &choice) else { return };
     let area = monitor.work_area();
-    let width = WIDTH.load(Ordering::Relaxed).clamp(1, area.size.width);
+    let normal = WIDTH.load(Ordering::Relaxed).clamp(1, area.size.width);
+    let width = if WIDE.load(Ordering::Relaxed) { (area.size.width / 2).max(normal) } else { normal };
     let x = if side == "left" { area.position.x } else { area.position.x + area.size.width as i32 - width as i32 };
+    let position = PhysicalPosition::new(x, area.position.y);
     let _ = win.set_size(PhysicalSize::new(width, area.size.height));
-    let _ = win.set_position(PhysicalPosition::new(x, area.position.y));
+    let _ = win.set_position(position);
+    // When a move arrives together with a shrink (leaving wide mode), the window manager
+    // applies the new size but can drop the move; repeat it once the resize is through.
+    let win = win.clone();
+    std::thread::spawn(move || {
+        for _ in 0..25 {
+            if win.outer_size().is_ok_and(|size| size.width == width) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = win.set_position(position);
+    });
 }
 
 pub fn show(app: &AppHandle) {
@@ -128,6 +145,18 @@ pub fn hide(app: &AppHandle) {
     // The UI saves any open draft when it receives this.
     let _ = win.emit("panel-hiding", ());
     let _ = win.hide();
+}
+
+pub fn set_wide(app: &AppHandle, on: bool) {
+    let Some(win) = window(app) else { return };
+    if on && !WIDE.load(Ordering::Relaxed) {
+        // Keep the normal width (perhaps just resized) to come back to.
+        remember_width(app, &win);
+    }
+    WIDE.store(on, Ordering::Relaxed);
+    if win.is_visible().unwrap_or(false) {
+        dock(app, &win);
+    }
 }
 
 /// Moves the visible panel after its side or monitor changed in Settings.
@@ -157,6 +186,10 @@ pub fn toggle(app: &AppHandle) {
 
 /// Records the current width (e.g. after the user dragged the edge) and persists it.
 fn remember_width(app: &AppHandle, win: &WebviewWindow) {
+    // The wide width is temporary; the normal one is what gets remembered.
+    if WIDE.load(Ordering::Relaxed) {
+        return;
+    }
     let Ok(size) = win.outer_size() else { return };
     if size.width == 0 || !win.is_visible().unwrap_or(false) {
         return;

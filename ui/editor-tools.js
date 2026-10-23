@@ -1,7 +1,8 @@
 'use strict';
 
-// Editing helpers: suggestion menus at the caret ([[ links, / blocks, \ LaTeX),
-// list continuation on Enter, and the live math preview.
+// Editing helpers shared by the question boxes and the answer editor: suggestion menus
+// at the caret, where code and maths are, the `/` blocks, LaTeX command matching, and
+// the floating maths preview for the question boxes.
 
 /** Marks where the caret goes in inserted text. */
 const CARET = '‸';
@@ -331,12 +332,11 @@ function slashItems(query) {
 }
 
 /**
- * Inserts a block snippet where `/query` was typed: on its own line (moving any
- * text after it below), with blank lines where Markdown needs them to keep the
- * block separate from the paragraphs around it.
+ * Where and what to insert for a block snippet typed as `/query` at [start, end): on its
+ * own line (moving any text after it below), with blank lines where Markdown needs them
+ * to keep the block apart from the paragraphs around it. ‸ in `text` marks the cursor.
  */
-function insertBlock(field, start, end, block) {
-  const value = field.value;
+function blockInsertion(value, start, end, block) {
   let text = block.snippet;
   if (block.block) {
     const lineStart = value.lastIndexOf('\n', start - 1) + 1;
@@ -357,38 +357,10 @@ function insertBlock(field, start, end, block) {
       text += '\n';
     }
   }
-  replaceText(field, start, end, text);
+  return { start, end, text };
 }
 
-function attachSlashMenu(field, container, onImage) {
-  return attachCaretMenu(field, container, {
-    className: 'slash-menu',
-    width: 260,
-    match(f) {
-      const pos = f.selectionStart;
-      if (pos !== f.selectionEnd) return null;
-      const before = f.value.slice(0, pos);
-      const m = before.slice(before.lastIndexOf('\n') + 1).match(/(?:^|\s)\/([^\s/]*)$/);
-      if (!m) return null;
-      const start = pos - m[1].length - 1;
-      const scan = scanMarkup(f.value);
-      if (inCode(scan, start) || scan.math.some((r) => start >= r.from && start <= r.to)) return null;
-      return { start, end: pos, query: m[1] };
-    },
-    items: (t) => slashItems(t.query),
-    render: (b) => [h('span', { class: 'row-main' }, h('span', { class: 'slash-icon' }, b.icon), b.label)],
-    accept(b, t, f) {
-      if (b.action === 'image') {
-        replaceText(f, t.start, t.end, '');
-        onImage();
-      } else {
-        insertBlock(f, t.start, t.end, b);
-      }
-    },
-  });
-}
-
-// ---------- \ LaTeX autocomplete ----------
+// ---------- \ LaTeX commands ----------
 
 const texCache = new Map();
 function texPreview(tex) {
@@ -418,71 +390,6 @@ function latexMatches(query) {
     if (s >= 0) scored.push({ c, s, i });
   });
   return scored.sort((a, b) => a.s - b.s || a.i - b.i).map((x) => x.c);
-}
-
-function attachLatexAutocomplete(field, container) {
-  return attachCaretMenu(field, container, {
-    className: 'tex-suggest',
-    width: 320,
-    match(f) {
-      const pos = f.selectionStart;
-      if (pos !== f.selectionEnd) return null;
-      const m = f.value.slice(0, pos).match(/\\([a-zA-Z]*)$/);
-      if (!m) return null;
-      const start = pos - m[0].length;
-      // `\\` is a line break in matrices, not the start of a command.
-      if (f.value[start - 1] === '\\') return null;
-      const region = mathAt(f.value, pos);
-      return region ? { start, end: pos, query: m[1], display: region.display } : null;
-    },
-    items: (t) => latexMatches(t.query).slice(0, 8),
-    render: (c) => [
-      h('span', { class: 'row-main' }, h('span', { class: 'tex-sym', html: texPreview(c.preview) }), h('span', { class: 'tex-cmd' }, '\\' + c.name)),
-      h('small', {}, c.desc),
-    ],
-    accept(c, t, f) {
-      // Inline math can't span lines, so multi-line templates are flattened there.
-      let text = t.display ? c.insert : c.insert.replace(/\n\s*/g, ' ');
-      // Replace the whole command name even if the caret was in the middle of it.
-      const tail = f.value.slice(t.end).match(/^[a-zA-Z]*/)[0];
-      const next = f.value[t.end + tail.length] || '';
-      if (!text.includes(CARET) && /[a-zA-Z]/.test(next)) text += ' ';
-      replaceText(f, t.start, t.end + tail.length, text);
-    },
-  });
-}
-
-// ---------- Enter continues lists, checklists and quotes ----------
-
-function attachListContinuation(field) {
-  field.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
-    const pos = field.selectionStart;
-    if (pos !== field.selectionEnd) return;
-    const value = field.value;
-    const lineStart = value.lastIndexOf('\n', pos - 1) + 1;
-    const line = value.slice(lineStart, pos);
-    const quote = line.match(/^[ \t]*(?:>[ \t]?)+/);
-    const quoteLen = quote ? quote[0].length : 0;
-    const item = line.slice(quoteLen).match(/^([ \t]*)(?:([-*+])|(\d+)([.)]))([ \t]+)(\[[ xX]\][ \t]+)?/);
-    if (!quote && !item) return;
-    if (inCode(scanMarkup(value), pos)) return;
-    e.preventDefault();
-
-    const used = quoteLen + (item ? item[0].length : 0);
-    const restOfLine = value.slice(pos).match(/^[^\n]*/)[0];
-    if (!line.slice(used).trim() && !restOfLine.trim()) {
-      // Enter on an empty item ends the list (or the quote, if there's no list).
-      replaceText(field, item ? lineStart + quoteLen : lineStart, pos, '');
-      return;
-    }
-    let next = quote ? quote[0] : '';
-    if (item) {
-      const marker = item[2] || `${Number(item[3]) + 1}${item[4]}`;
-      next += item[1] + marker + item[5] + (item[6] ? '[ ] ' : '');
-    }
-    replaceText(field, pos, pos, '\n' + next);
-  });
 }
 
 // ---------- Live math preview ----------

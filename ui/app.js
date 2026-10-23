@@ -49,6 +49,9 @@ const state = {
   /** File dialogs open right now; the panel mustn't hide while one is up. */
   dialogs: 0,
   themePref: 'system',
+  /** Writing wide right now, and whether you like to (remembered in config.json). */
+  wide: false,
+  widePref: false,
   /** "linux" or "windows" (from get_settings). */
   platform: 'linux',
   side: 'right',
@@ -462,6 +465,7 @@ function render() {
   }
   list.replaceChildren(...items);
   list.scrollTop = scroll;
+  if (state.editing && state.editing.editor) state.editing.editor.view.requestMeasure();
 
   if (keepFocus) {
     keepFocus.focus({ preventScroll: true });
@@ -557,7 +561,7 @@ function saveAnswer() {
   clearTimeout(autosaveTimer);
   const editing = state.editing;
   if (!editing || editing.kind !== 'answer' || editing.orphan) return saveChain;
-  const answer = editing.textarea.value;
+  const answer = editing.editor.getText();
   if (answer === editing.saved) return saveChain;
   editing.saved = answer;
   saveChain = saveChain
@@ -576,6 +580,8 @@ function saveAnswer() {
 async function closeEditor() {
   if (!state.editing) return;
   await saveAnswer();
+  if (state.editing.editor) state.editing.editor.destroy();
+  if (state.wide) setWide(false);
   setEditing(null);
   render();
   // Keep going from the keyboard where you left off.
@@ -584,81 +590,55 @@ async function closeEditor() {
 
 async function editAnswer(q, caret = null) {
   await closeEditor();
-  const textarea = h('textarea', { spellcheck: 'true', placeholder: 'Write your answer in Markdown…  / for blocks, $math$ (\\ for symbols), [[ to link a question, paste or drop images' });
-  textarea.value = q.answer;
-  const preview = h('div', { class: 'preview', hidden: true });
-  const writeTab = h('button', { class: 'seg', 'aria-selected': 'true' }, 'Write');
-  const previewTab = h('button', { class: 'seg', 'aria-selected': 'false' }, 'Preview');
-  const showPreview = (on) => {
-    writeTab.setAttribute('aria-selected', String(!on));
-    previewTab.setAttribute('aria-selected', String(on));
-    textarea.hidden = on;
-    preview.hidden = !on;
-    if (on) preview.replaceChildren(renderMarkdown(textarea.value || '*Nothing yet.*'));
-    else textarea.focus();
-  };
-  writeTab.onclick = () => showPreview(false);
-  previewTab.onclick = () => showPreview(true);
-
+  const host = h('div', { class: 'cm-host' });
+  const wideButton = h('button', { class: 'btn', title: 'Write wide (Ctrl+Shift+W)', onclick: () => toggleWide() }, '⤢ Wide');
   const el = h('div', { class: 'editor' },
-    h('div', { class: 'tabs' }, writeTab, previewTab),
-    textarea,
-    preview,
+    host,
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', onclick: closeEditor }, 'Done'),
-      h('span', { class: 'hint' }, 'Ctrl+Enter done · Ctrl+P preview · / blocks · [[ link · autosaves'),
+      wideButton,
+      h('span', { class: 'hint' }, 'Ctrl+Enter done · / blocks · [[ link · saves as you type'),
     ),
   );
-
-  // Menus first: their Enter/Tab/Esc handling must win over the editor's own keys.
-  const menus = [
-    attachLinkAutocomplete(textarea, q.id, el),
-    attachSlashMenu(textarea, el, insertImagesFromPicker),
-    attachLatexAutocomplete(textarea, el),
-  ];
-  attachListContinuation(textarea);
-  attachMathPreview(textarea, el, menus);
-  textarea.addEventListener('input', () => {
-    autosize(textarea);
-    clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(saveAnswer, 700);
+  const editor = createAnswerEditor({
+    parent: host,
+    doc: q.answer,
+    caret,
+    selfId: q.id,
+    onChange: () => {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(saveAnswer, 700);
+    },
+    onDone: () => closeEditor(),
+    onImage: insertImagesFromPicker,
+    onPaste,
   });
-  textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.ctrlKey) {
-      e.preventDefault();
-      closeEditor();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      closeEditor();
-    } else if (e.key === 'Tab' && !e.shiftKey) {
-      e.preventDefault();
-      insertAtCursor(textarea, '  ');
-    }
-  });
-  el.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() === 'p' && e.ctrlKey) {
-      e.preventDefault();
-      showPreview(textarea.hidden === false);
-    } else if (e.key === 'Escape' && textarea.hidden) {
-      e.stopPropagation();
-      closeEditor();
-    }
-  });
-  textarea.addEventListener('paste', onPaste);
-
-  setEditing({ id: q.id, kind: 'answer', el, textarea, saved: q.answer, title: q.title });
+  setEditing({ id: q.id, kind: 'answer', el, editor, wideButton, saved: q.answer, title: q.title });
   state.expanded.add(q.id);
   render();
-  autosize(textarea);
-  textarea.focus();
-  const pos = caret ?? textarea.value.length;
-  textarea.setSelectionRange(pos, pos);
-  // Scroll the textarea so the caret's line is visible.
-  const line = textarea.value.slice(0, pos).split('\n').length - 1;
-  const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
-  textarea.scrollTop = Math.max(0, line * lineHeight - textarea.clientHeight / 3);
-  textarea.closest('.q').scrollIntoView({ block: 'nearest' });
+  if (state.widePref) setWide(true);
+  editor.focus();
+  const card = el.closest('.q');
+  if (card) card.scrollIntoView({ block: 'nearest' });
+}
+
+// ---------- Writing wide ----------
+
+/** Widens the panel to about half the screen while you write; Rust re-docks it. */
+function setWide(on) {
+  state.wide = on;
+  invoke('set_wide', { on });
+  const editing = state.editing;
+  if (editing && editing.wideButton) editing.wideButton.textContent = on ? '⤡ Narrow' : '⤢ Wide';
+}
+
+function toggleWide() {
+  const editing = state.editing;
+  if (!editing || editing.kind !== 'answer') return;
+  setWide(!state.wide);
+  state.widePref = state.wide;
+  invoke('save_wide_pref', { on: state.wide });
+  editing.editor.focus();
 }
 
 async function editTitle(q) {
@@ -706,39 +686,32 @@ function autosize(textarea) {
   textarea.style.height = Math.min(textarea.scrollHeight + 2, window.innerHeight * 0.6) + 'px';
 }
 
-function insertAtCursor(textarea, text) {
-  const { selectionStart: s, selectionEnd: e, value } = textarea;
-  textarea.value = value.slice(0, s) + text + value.slice(e);
-  textarea.setSelectionRange(s + text.length, s + text.length);
-  textarea.dispatchEvent(new Event('input'));
-}
-
 // ---------- Images ----------
 
 function insertImage(path) {
   const editing = state.editing;
   if (!editing || editing.kind !== 'answer') return;
-  const ta = editing.textarea;
-  const before = ta.value.slice(0, ta.selectionStart);
-  const pad = before && !before.endsWith('\n') ? '\n' : '';
-  insertAtCursor(ta, `${pad}![](${path})\n`);
+  editing.editor.insertBlockText(`![](${path})`);
 }
 
 async function insertImagesFromPicker() {
   const editing = state.editing;
   const paths = await withDialog(() => call('pick_images'));
   for (const path of paths) insertImage(await call('import_image', { path }));
-  if (editing && state.editing === editing) editing.textarea.focus();
+  if (editing && state.editing === editing) editing.editor.focus();
 }
 
-async function onPaste(e) {
-  const item = [...e.clipboardData.items].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
-  if (!item) return;
+/** Saves a pasted screenshot next to the notes and links it. True if it took the paste. */
+function onPaste(e) {
+  const item = [...((e.clipboardData && e.clipboardData.items) || [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+  if (!item) return false;
   e.preventDefault();
   const file = item.getAsFile();
   const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  insertImage(await call('save_image', bytes, { headers: { 'x-ext': ext } }));
+  file.arrayBuffer().then(async (buffer) => {
+    insertImage(await call('save_image', new Uint8Array(buffer), { headers: { 'x-ext': ext } }));
+  });
+  return true;
 }
 
 window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (event) => {
@@ -870,7 +843,7 @@ function saveUiSettings() {
 function applyZoom(zoom) {
   state.zoom = Math.round(Math.min(2.5, Math.max(0.7, zoom)) * 10) / 10;
   document.documentElement.style.setProperty('--zoom', state.zoom);
-  if (state.editing && state.editing.textarea) autosize(state.editing.textarea);
+  if (state.editing && state.editing.editor) state.editing.editor.view.requestMeasure();
 }
 
 /** step: +0.1 / -0.1, or 0 to reset to 100%. */
@@ -994,6 +967,7 @@ function applySide(side) {
 /** Settings from config.json that change how the panel looks. */
 function applySettings(s) {
   state.platform = s.platform;
+  state.widePref = !!s.wide_editing;
   applyZoom(s.zoom || 1);
   applyCompact(!!s.compact);
   applySide(s.side);
@@ -1164,7 +1138,9 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
-  const inField = e.target instanceof Element && e.target.matches('input, textarea');
+  // The editor already handled this key (closing its suggestions, for one).
+  if (e.defaultPrevented) return;
+  const inField = e.target instanceof Element && (e.target.matches('input, textarea, select') || e.target.isContentEditable);
   const onList = e.target === document.body || e.target === $('#list');
   if (e.key === 'Escape') {
     if (!$('#peek').hidden) hidePeek();
@@ -1189,6 +1165,9 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'n' && e.ctrlKey) {
     e.preventDefault();
     $('#new').focus();
+  } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'w') {
+    e.preventDefault();
+    toggleWide();
   } else if (onList && !e.ctrlKey && !e.altKey && !e.metaKey && listKey(e)) {
     e.preventDefault();
   }

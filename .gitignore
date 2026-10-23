@@ -2,3 +2,4 @@
 /src-tauri/gen/
 # Your questions live here by default; keep them out of the code history.
 /notes/
+/node_modules/

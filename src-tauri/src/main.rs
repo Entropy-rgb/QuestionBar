@@ -292,6 +292,8 @@ fn main() {
             settings::set_notes_dir,
             settings::add_welcome,
             settings::set_check_updates,
+            settings::set_wide,
+            settings::save_wide_pref,
             check_update,
             install_update,
             take_notices,

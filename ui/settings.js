@@ -282,6 +282,7 @@ function keysSection() {
     ['/ or Ctrl+F', 'search'],
     ['n or Ctrl+N', 'new question'],
     ['Ctrl+Shift+V', state.platform === 'windows' ? 'quote the text you copied' : 'quote the text you highlighted'],
+    ['Ctrl+Shift+W', 'write wide while editing an answer'],
     ['Alt+Left', 'back after following a link'],
     ['Esc', 'close the panel'],
   ];

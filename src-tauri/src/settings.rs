@@ -35,6 +35,7 @@ pub struct SettingsView {
     /// "linux" or "windows", for labels like Super vs Win.
     platform: &'static str,
     check_updates: bool,
+    wide_editing: bool,
     /// Built with install.sh: updates come from `git pull`, not from releases.
     source_build: bool,
     monitors: Vec<MonitorView>,
@@ -74,6 +75,7 @@ pub fn get_settings(app: AppHandle, config: State<Mutex<Config>>) -> SettingsVie
         can_set_shortcut: platform::can_set_shortcut(),
         platform: if cfg!(windows) { "windows" } else { "linux" },
         check_updates: c.check_updates,
+        wide_editing: c.wide_editing,
         source_build: crate::SOURCE_BUILD,
         monitors: monitors(&app),
         version: app.package_info().version.to_string(),
@@ -156,6 +158,22 @@ pub fn set_autostart(app: AppHandle, config: State<Mutex<Config>>, on: bool) -> 
 pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     let start = app.state::<Mutex<Config>>().lock().unwrap().notes_dir.clone();
     platform::pick_folder(&app, start).await
+}
+
+/// Widens the panel while you write (or back to normal); nothing is saved.
+#[tauri::command]
+pub fn set_wide(app: AppHandle, on: bool) {
+    panel::set_wide(&app, on);
+}
+
+/// Remembers whether you like writing wide.
+#[tauri::command]
+pub fn save_wide_pref(config: State<Mutex<Config>>, on: bool) {
+    let mut config = config.lock().unwrap();
+    if config.wide_editing != on {
+        config.wide_editing = on;
+        config.save();
+    }
 }
 
 #[tauri::command]
