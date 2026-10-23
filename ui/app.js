@@ -56,6 +56,16 @@ const md = window.markdownit({
     return '';
   },
 });
+// Also accept `$ v_rms $` (spaces just inside both dollars). Plain $…$ can't start or end
+// with a space, which is what keeps "costs $5 and $10" as text.
+texmath.rules.dollars.inline.push({
+  name: 'math_inline_padded',
+  rex: /\$[ \t]+([^$\s](?:[^$\n]*?[^$\s])?)[ \t]+\$/gy,
+  tmpl: '<eq>$1</eq>',
+  tag: '$',
+  pre: texmath.$_pre,
+  post: texmath.$_post,
+});
 md.use(texmath, { engine: katex, delimiters: 'dollars', katexOptions: { throwOnError: false } });
 md.use(calloutPlugin);
 md.use(taskListPlugin);
@@ -89,29 +99,45 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 
 // Question titles can contain the same links; everything else in a title is plain text.
 const TITLE_LINK = /\[((?:\\.|[^\]\\])*)\]\(#([0-9a-z]{4,16})\)/g;
-const unescapeLabel = (label) => label.replace(/\\(.)/g, '$1');
+const unescapeLabel = (label) => label.replace(/\\([\[\]])/g, '$1');
 
 /** A title with its `[label](#id)` links reduced to their labels. */
 function plainTitle(title) {
   return title.replace(TITLE_LINK, (_, label) => unescapeLabel(label));
 }
 
-/** A title as DOM nodes, with question links made clickable. */
+/** Plain title text as DOM nodes, with `$…$` / `$$…$$` math rendered (same rules as answers). */
+function renderTitleText(text) {
+  const nodes = [];
+  let last = 0;
+  for (const m of scanMarkup(text).math) {
+    if (!m.closed) continue;
+    if (m.start > last) nodes.push(text.slice(last, m.start));
+    const tex = text.slice(m.from, m.to);
+    const html = katex.renderToString(m.display ? '\\displaystyle ' + tex : tex, { throwOnError: false });
+    nodes.push(h('span', { class: 'title-math', html }));
+    last = m.end;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+/** A title as DOM nodes, with question links made clickable and math rendered. */
 function renderTitle(title) {
   const nodes = [];
   let last = 0;
   for (const m of title.matchAll(TITLE_LINK)) {
-    if (m.index > last) nodes.push(title.slice(last, m.index));
+    if (m.index > last) nodes.push(...renderTitleText(title.slice(last, m.index)));
     const exists = state.questions.some((q) => q.id === m[2]);
     nodes.push(h('a', {
       class: exists ? 'qlink' : 'qlink missing',
       href: '#' + m[2],
       'data-qid': m[2],
       title: exists ? null : 'The linked question was deleted',
-    }, unescapeLabel(m[1])));
+    }, renderTitleText(unescapeLabel(m[1]))));
     last = m.index + m[0].length;
   }
-  if (last < title.length) nodes.push(title.slice(last));
+  if (last < title.length) nodes.push(...renderTitleText(title.slice(last)));
   return nodes;
 }
 
@@ -254,6 +280,7 @@ function attachAutocomplete(input, onEnter) {
       onEnter();
     }
   });
+  return { isOpen: () => !box.hidden };
 }
 
 // ---------- Finding questions to link to ----------
@@ -378,7 +405,7 @@ function caretFromSelection(container, raw) {
 /** A draft whose question vanished (deleted or rewritten outside the app). */
 function renderOrphan(editing) {
   return h('article', { class: 'q open expanded' },
-    h('div', { class: 'q-head' }, h('div', { class: 'q-title' }, plainTitle(editing.title))),
+    h('div', { class: 'q-head' }, h('div', { class: 'q-title' }, renderTitle(editing.title))),
     h('div', { class: 'orphan-note' }, 'This question was changed or removed outside QuestionBar. Copy your draft before closing it.'),
     h('div', { class: 'q-body' }, editing.el),
   );
@@ -445,6 +472,8 @@ async function addQuestion() {
   if (!text) return;
   const q = await call('add_question', { text, quote: state.captureQuote });
   input.value = '';
+  // Lets the suggestion lists and math preview notice the box was cleared.
+  input.dispatchEvent(new Event('input'));
   setCapture('');
   replaceQuestion(q);
   render();
@@ -609,8 +638,8 @@ async function editTitle(q) {
       render();
     }
   };
-  attachLinkAutocomplete(input, q.id, wrap);
-  attachAutocomplete(input, save);
+  const menus = [attachLinkAutocomplete(input, q.id, wrap), attachAutocomplete(input, save)];
+  attachMathPreview(input, wrap, menus);
   input.addEventListener('keydown', cancel);
   quoteBox.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.ctrlKey) {
@@ -844,8 +873,10 @@ async function applyTheme() {
 }
 
 // Link suggestions first, so Enter picks a link instead of submitting the question.
-attachLinkAutocomplete($('#new'), null, $('#new').parentElement);
-attachAutocomplete($('#new'), addQuestion);
+attachMathPreview($('#new'), $('#new').parentElement, [
+  attachLinkAutocomplete($('#new'), null, $('#new').parentElement),
+  attachAutocomplete($('#new'), addQuestion),
+]);
 
 $('#search').addEventListener('input', render);
 $('#search').addEventListener('keydown', (e) => {

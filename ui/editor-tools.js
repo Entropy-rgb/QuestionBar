@@ -6,8 +6,12 @@
 /** Marks where the caret goes in inserted text. */
 const CARET = '‸';
 
-/** Viewport position of the caret in a textarea (mirror-element technique). */
+/**
+ * Viewport position of the caret (mirror-element technique). For a single-line
+ * input, y/lineHeight span the whole field so things placed "below" clear it.
+ */
 function caretCoords(ta) {
+  const single = ta.tagName === 'INPUT';
   const style = getComputedStyle(ta);
   const mirror = document.createElement('div');
   for (const prop of ['boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
@@ -16,15 +20,16 @@ function caretCoords(ta) {
     mirror.style[prop] = style[prop];
   }
   Object.assign(mirror.style, { position: 'absolute', visibility: 'hidden', top: '0', left: '-9999px',
-    whiteSpace: 'pre-wrap', overflowWrap: 'break-word', borderStyle: 'solid' });
+    whiteSpace: single ? 'pre' : 'pre-wrap', overflowWrap: 'break-word', borderStyle: 'solid' });
+  if (single) mirror.style.width = 'auto';
   mirror.textContent = ta.value.slice(0, ta.selectionStart);
   const marker = h('span', {}, '​');
   mirror.append(marker);
   document.body.append(mirror);
   const rect = ta.getBoundingClientRect();
   const x = rect.left + marker.offsetLeft - ta.scrollLeft;
-  const y = rect.top + marker.offsetTop - ta.scrollTop;
-  const lineHeight = marker.offsetHeight;
+  const y = single ? rect.top : rect.top + marker.offsetTop - ta.scrollTop;
+  const lineHeight = single ? rect.height : marker.offsetHeight;
   mirror.remove();
   return { x, y, lineHeight };
 }
@@ -146,11 +151,12 @@ function attachLinkAutocomplete(field, selfId, container) {
     },
     items: (t) => findQuestions(t.query, selfId).slice(0, 7),
     render: (q) => [
-      h('span', { class: 'link-title' }, h('i', { class: `mini-dot ${q.status}` }), plainTitle(q.title)),
+      h('span', { class: 'link-title' }, h('i', { class: `mini-dot ${q.status}` }), renderTitleText(plainTitle(q.title))),
       h('small', {}, q.topic),
     ],
     accept(q, t, f) {
-      const label = plainTitle(q.title).replace(/([\[\]\\])/g, '\\$1');
+      // Only brackets need escaping in a link label; LaTeX backslashes stay as they are.
+      const label = plainTitle(q.title).replace(/([\[\]])/g, '\\$1');
       // Swallow a closing ]] the user may already have typed.
       const tail = f.value.slice(t.end).match(/^[^\]\n]*\]\]/);
       replaceText(f, t.start, t.end + (tail ? tail[0].length : 0), `[${label}](#${q.id})`);
@@ -239,6 +245,13 @@ function scanMarkup(text) {
           i++;
         } else if (i + 1 < lineEnd && !/\s/.test(text[i + 1])) {
           inline = i;
+        } else {
+          // `$ x $`: padded with spaces on both sides (the renderer accepts this too).
+          const m = /^\$[ \t]+[^$\s](?:[^$\n]*?[^$\s])?[ \t]+\$(?!\d)/.exec(text.slice(i, lineEnd));
+          if (m) {
+            math.push({ start: i, from: i + 1, to: i + m[0].length - 1, end: i + m[0].length, display: false, closed: true });
+            i += m[0].length - 1;
+          }
         }
       }
     }
@@ -489,6 +502,8 @@ function attachMathPreview(field, container, menus) {
     const above = c.y - box.offsetHeight - 6;
     const fitsBelow = below + box.offsetHeight <= window.innerHeight - 8;
     const menuOpen = menus.some((m) => m.isOpen());
+    // A suggestion list sits below; with no room above either, step aside until it closes.
+    if (menuOpen && above < 8) box.hidden = true;
     box.style.top = Math.max(8, menuOpen || !fitsBelow ? above : below) + 'px';
   };
   const update = () => {
