@@ -9,7 +9,7 @@ Your notes are plain Markdown files, one per topic, in a folder you choose. Open
 What you get:
 
 - **Fast capture.** One shortcut from any app. Hashtags at the end file the question (`Why do magnets attract? #physics`). The ❝ button quotes the sentence you highlighted, so you remember what confused you.
-- **Answers worth rereading.** Markdown with LaTeX maths and a live preview as you type, `\` suggestions for symbols, highlighted code, pasted screenshots, and a `/` menu for tables, checklists and callouts.
+- **Answers worth rereading.** An editor that shows your answer formatted as you write it: maths, tables, images, callouts and checklists render in place, and the Markdown appears only where your cursor is. `\` suggests LaTeX symbols, `/` inserts blocks, and you can paste screenshots.
 - **Questions that link up.** Type `[[` to link one question to another. Hover a link to peek, click to jump.
 - **Easy to find later.** Search, filters, a compact list and full keyboard control.
 
@@ -45,9 +45,10 @@ An empty notes folder starts with a **welcome** topic: six answered questions th
 | Click a question | Opens it; click its title again to close it |
 | Circle on the left | Marks it answered or open (your first answer marks it answered for you) |
 | Double-click an answer | Edits it, with the cursor on the word you clicked |
-| **Write answer** | Markdown editor that saves as you type. **Ctrl+P** previews, **Ctrl+Enter** or **Esc** closes it |
+| **Write answer** | Opens the editor. It shows your answer formatted as you type (Obsidian-style live preview): the Markdown symbols show only on the line your cursor is on, and maths, tables, images, callouts and checkboxes render in place. It saves as you type; **Ctrl+Enter** or **Esc** closes it |
+| **⤢ Wide**, or **Ctrl+Shift+W** while writing | Widens the panel to half the screen for long answers; it narrows again when you click Done. QuestionBar remembers if you like writing wide |
 | `/` at the start of a line or after a space | Block menu: heading, lists, checklist, code block (`/python`, `/rust`… for a language), maths, table, divider, quote, question link, Note / Tip / Warning / Important callouts, fold-away block, image from file |
-| Typing inside `$…$` or `$$…$$` | Live preview of the formula; `\` suggests LaTeX commands (`\al` → α) and templates like `\frac{}{}` |
+| Cursor inside `$…$` or `$$…$$` | Shows the source with a preview of the formula; `\` suggests LaTeX commands (`\al` → α) and templates like `\frac{}{}` |
 | Enter in a list, checklist or quote | Continues it; Enter on an empty item ends it |
 | Checkbox in an answer | Ticks the item and saves it |
 | Paste or drop an image while editing | Saved in `notes/assets/` and linked |
@@ -79,6 +80,7 @@ The list works without a mouse whenever you aren't typing in a box:
 | n or Ctrl+N | new question |
 | / or Ctrl+F | search |
 | Ctrl+= / Ctrl+- / Ctrl+0, or Ctrl+scroll | text size (70–250%) |
+| Ctrl+Shift+W | write wide (while editing an answer) |
 | Esc | close the panel |
 
 ## Settings
@@ -195,6 +197,8 @@ cargo test           # parser, storage and setup tests
 cargo run            # debug build; the UI is in ../ui (plain HTML/JS, no bundler)
 ```
 
+The answer editor uses CodeMirror 6, bundled once into `ui/vendor/codemirror.min.js`. To change its version or the parts it exports (`scripts/codemirror-entry.mjs`), run `npm install` and `npm run build:editor`. The app itself needs no Node at build or run time.
+
 The window runs through XWayland (`GDK_BACKEND=x11`) because Wayland doesn't let apps dock themselves to a screen edge.
 
 Debug builds never change your real shortcut or autostart entry. With `QB_DEV_EVAL=script.js`, a debug build runs that script in the panel after it loads, for scripted UI checks.
@@ -209,4 +213,4 @@ Windows updates are signed. The workflow signs them with the private key in the 
 
 ## License
 
-[MIT](LICENSE). The libraries bundled in `ui/vendor/` (markdown-it, markdown-it-texmath, KaTeX, highlight.js) keep their own licenses, which sit next to them.
+[MIT](LICENSE). The libraries bundled in `ui/vendor/` (markdown-it, markdown-it-texmath, KaTeX, highlight.js, CodeMirror) keep their own licenses, which sit next to them.
